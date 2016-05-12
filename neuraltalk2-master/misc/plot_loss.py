@@ -44,7 +44,7 @@ def plot_train_val(train_loss, val_loss, id):
     line_val, = plt.plot(keys, val_vals, label='Validation')
     line_train, = plt.plot(keys, train_vals, label='Train')
     lines.append(line_train), lines.append(line_val)
-    plt.legend(handles=lines, loc='upper right')
+    plt.legend(lines, loc='upper right')
     plt.xlabel('Num. Iterations'), plt.ylabel('Loss')
     plt.title('Training vs. Validation Loss'), plt.savefig(img)
 
@@ -59,7 +59,7 @@ def plot_scores(val_scores, metrics, id):
         plt.scatter(keys, scores)
         line, = plt.plot(keys, scores, label=metric)
         lines.append(line)
-    plt.legend(handles=lines, loc='upper left', prop={'size': 15})
+    plt.legend(lines, loc='upper left', prop={'size': 15})
     plt.xlabel('Num. Iterations'), plt.ylabel('Score')
     plt.title('Validation Scores'), plt.savefig(img)
 
