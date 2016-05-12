@@ -34,7 +34,7 @@ function net_utils.build_cnn(cnn, opt)
   local layer_num = utils.getopt(opt, 'layer_num', 38)
   local backend = utils.getopt(opt, 'backend', 'cudnn')
   local encoding_size = utils.getopt(opt, 'encoding_size', 512)
-  
+
   if backend == 'cudnn' then
     require 'cudnn'
     backend = cudnn
@@ -78,7 +78,7 @@ function net_utils.prepro(imgs, data_augment, on_gpu)
   local cnn_input_size = 224
 
   -- cropping data augmentation, if needed
-  if h > cnn_input_size or w > cnn_input_size then 
+  if h > cnn_input_size or w > cnn_input_size then
     local xoff, yoff
     if data_augment then
       xoff, yoff = torch.random(w-cnn_input_size), torch.random(h-cnn_input_size)
@@ -189,7 +189,7 @@ function net_utils.unsanitize_gradients(net)
 end
 
 --[[
-take a LongTensor of size DxN with elements 1..vocab_size+1 
+take a LongTensor of size DxN with elements 1..vocab_size+1
 (where last dimension is END token), and decode it into table of raw text sentences.
 each column is a sequence. ix_to_word gives the mapping to strings, as a table
 --]]
@@ -225,9 +225,9 @@ function net_utils.language_eval(predictions, id)
   -- this is gross, but we have to call coco python code.
   -- Not my favorite kind of thing, but here we go
   local out_struct = {val_predictions = predictions}
-  utils.write_json('coco-caption/val' .. id .. '.json', out_struct) -- serialize to json (ew, so gross)
+  utils.write_json('coco-caption/results/val' .. id .. '.json', out_struct) -- serialize to json (ew, so gross)
   os.execute('./misc/call_python_caption_eval.sh val' .. id .. '.json') -- i'm dying over here
-  local result_struct = utils.read_json('coco-caption/val' .. id .. '.json_out.json') -- god forgive me
+  local result_struct = utils.read_json('coco-caption/results/val' .. id .. '.json_out.json') -- god forgive me
   return result_struct
 end
 
