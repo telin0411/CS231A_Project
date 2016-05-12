@@ -1,4 +1,3 @@
-
 require 'torch'
 require 'nn'
 require 'nngraph'
@@ -26,6 +25,7 @@ cmd:option('-input_json','coco/data.json','path to the json file containing addi
 cmd:option('-cnn_proto','model/VGG_ILSVRC_16_layers_deploy.prototxt','path to CNN prototxt file in Caffe format. Note this MUST be a VGGNet-16 right now.')
 cmd:option('-cnn_model','model/VGG_ILSVRC_16_layers.caffemodel','path to CNN model file containing the weights, Caffe format. Note this MUST be a VGGNet-16 right now.')
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
+cmd:option('-resnet_t7', '../models/ResNet/resnet-50.t7', 'path to CNN torch .t7 model of resnet')
 
 -- Model settings
 cmd:option('-rnn_size',512,'size of the rnn in number of hidden nodes in each layer')
@@ -119,7 +119,9 @@ else
   local cnn_backend = opt.backend
   if opt.gpuid == -1 then cnn_backend = 'nn' end -- override to nn if gpu is disabled
   local cnn_raw = loadcaffe.load(opt.cnn_proto, opt.cnn_model, cnn_backend)
-  protos.cnn = net_utils.build_cnn(cnn_raw, {encoding_size = opt.input_encoding_size, backend = cnn_backend})
+  -- protos.cnn = net_utils.build_cnn(cnn_raw, {encoding_size = opt.input_encoding_size, backend = cnn_backend})
+  protos.cnn = net_utils.build_resnet(opt.resnet_t7, {encoding_size = opt.input_encoding_size, backend = cnn_backend})
+  print(protos.cnn)
   -- initialize a special FeatExpander module that "corrects" for the batch number discrepancy 
   -- where we have multiple captions per one image in a batch. This is done for efficiency
   -- because doing a CNN forward pass is expensive. We expand out the CNN features for each sentence
