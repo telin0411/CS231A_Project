@@ -16,7 +16,7 @@ def main(**kwargs):
 
     plot_train_full(train_loss, id)
     plot_train_val(train_loss, val_loss, id)
-    metrics = ['CIDEr', 'Bleu_4', 'Bleu_3', 'Bleu_2', 'Bleu_1', 'ROUGE_L', 'METEOR']
+    metrics = ['Bleu_4', 'Bleu_3', 'Bleu_2', 'Bleu_1', 'CIDEr', 'ROUGE_L', 'METEOR']
     plot_scores(val_scores, metrics, id)
 
 def plot_train_full(train_loss, id):
