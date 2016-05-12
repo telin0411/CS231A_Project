@@ -16,7 +16,7 @@ def main(**kwargs):
 
     plot_train_full(train_loss, id)
     plot_train_val(train_loss, val_loss, id)
-    metrics = ['Bleu_4', 'Bleu_3', 'Bleu_2', 'Bleu_1', 'CIDEr', 'ROUGE_L', 'METEOR']
+    metrics = ['Bleu_4', 'CIDEr', 'METEOR']
     plot_scores(val_scores, metrics, id)
 
 def plot_train_full(train_loss, id):
@@ -25,8 +25,7 @@ def plot_train_full(train_loss, id):
     vals = np.array(train_loss.values())
     indices = np.argsort(keys)
     keys, vals = keys[indices], vals[indices]
-    fig = plt.figure()
-    plt.scatter(keys, vals), plt.plot(keys, vals)
+    fig = plt.figure(), plt.plot(keys, vals)
     plt.xlabel('Num. Iterations'), plt.ylabel('Training Loss')
     plt.title('Training Loss'), plt.savefig(img)
 
@@ -40,7 +39,6 @@ def plot_train_val(train_loss, val_loss, id):
 
     lines = []
     fig = plt.figure()
-    plt.scatter(keys, val_vals), plt.scatter(keys, train_vals)
     line_val, = plt.plot(keys, val_vals, label='Validation')
     line_train, = plt.plot(keys, train_vals, label='Train')
     lines.append(line_train), lines.append(line_val)
@@ -56,12 +54,9 @@ def plot_scores(val_scores, metrics, id):
     fig = plt.figure()
     for metric in metrics:
         scores = [val_scores[str(key).decode("utf-8")][metric.decode("utf-8")] for key in keys]
-        plt.scatter(keys, scores)
         line, = plt.plot(keys, scores, label=metric)
         lines.append(line)
-    l1 = plt.legend(handles=lines[:4], loc='lower right', prop={'size': 13})
-    ax = plt.gca().add_artist(l1)
-    plt.legend(handles=lines[4:], loc='lower center', prop={'size': 13})
+    plt.legend(handles=lines, loc='lower right', prop={'size': 13})
     plt.xlabel('Num. Iterations'), plt.ylabel('Score')
     plt.title('Validation Scores'), plt.savefig(img)
 
