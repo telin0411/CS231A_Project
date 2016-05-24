@@ -11,8 +11,6 @@ require 'misc.LanguageModel'
 local net_utils = require 'misc.net_utils'
 require 'misc.optim_updates'
 
-require 'misc.Ranker'
-
 -------------------------------------------------------------------------------
 -- Input arguments and options
 -------------------------------------------------------------------------------
@@ -122,16 +120,12 @@ else
   if opt.gpuid == -1 then cnn_backend = 'nn' end -- override to nn if gpu is disabled
   local cnn_raw = loadcaffe.load(opt.cnn_proto, opt.cnn_model, cnn_backend)
   protos.cnn = net_utils.build_cnn(cnn_raw, {encoding_size = opt.input_encoding_size, backend = cnn_backend})
-  -- initialize a special FeatExpander module that "corrects" for the batch number discrepancy
+  -- initialize a special FeatExpander module that "corrects" for the batch number discrepancy 
   -- where we have multiple captions per one image in a batch. This is done for efficiency
   -- because doing a CNN forward pass is expensive. We expand out the CNN features for each sentence
   protos.expander = nn.FeatExpander(opt.seq_per_img)
   -- criterion for the language model
   protos.crit = nn.LanguageModelCriterion()
-
-  -- initialize Ranker
-  protos.ranker = nn.Ranker()
-  protos.crit_ranker = nn.RankerCriterion()
 end
 
 -- ship everything to GPU, maybe
@@ -139,7 +133,7 @@ if opt.gpuid >= 0 then
   for k,v in pairs(protos) do v:cuda() end
 end
 
--- flatten and prepare all model parameters to a single vector.
+-- flatten and prepare all model parameters to a single vector. 
 -- Keep CNN params separate in case we want to try to get fancy with different optims on LM/CNN
 local params, grad_params = protos.lm:getParameters()
 local cnn_params, cnn_grad_params = protos.cnn:getParameters()
@@ -147,11 +141,6 @@ print('total number of parameters in LM: ', params:nElement())
 print('total number of parameters in CNN: ', cnn_params:nElement())
 assert(params:nElement() == grad_params:nElement())
 assert(cnn_params:nElement() == cnn_grad_params:nElement())
-
--- Ranker parameters
-local ranker_params, ranker_grad_params = protos.ranker:getParameters()
-print('total number of parameters in Ranker: ', ranker_params:nElement())
-assert(ranker_params:nElement() == ranker_grad_params:nElement())
 
 -- construct thin module clones that share parameters with the actual
 -- modules. These thin module will have no intermediates and will be used
@@ -165,7 +154,7 @@ net_utils.sanitize_gradients(thin_cnn)
 local lm_modules = thin_lm:getModulesList()
 for k,v in pairs(lm_modules) do net_utils.sanitize_gradients(v) end
 
--- create clones and ensure parameter sharing. we have to do this
+-- create clones and ensure parameter sharing. we have to do this 
 -- all the way here at the end because calls such as :cuda() and
 -- :getParameters() reshuffle memory around.
 protos.lm:createClones()
@@ -239,7 +228,6 @@ local iter = 0
 local function lossFun()
   protos.cnn:training()
   protos.lm:training()
-  protos.ranker:training()
   grad_params:zero()
   if opt.finetune_cnn_after >= 0 and iter >= opt.finetune_cnn_after then
     cnn_grad_params:zero()
@@ -248,10 +236,10 @@ local function lossFun()
   -----------------------------------------------------------------------------
   -- Forward pass
   -----------------------------------------------------------------------------
-  -- get batch of data
+  -- get batch of data  
   local data = loader:getBatch{batch_size = opt.batch_size, split = 'train', seq_per_img = opt.seq_per_img}
   data.images = net_utils.prepro(data.images, true, opt.gpuid >= 0) -- preprocess in place, do data augmentation
-  -- data.images: Nx3x224x224
+  -- data.images: Nx3x224x224 
   -- data.seq: LxM where L is sequence length upper bound, and M = N*seq_per_img
 
   -- forward the ConvNet on images (most work happens here)
@@ -262,26 +250,14 @@ local function lossFun()
   local logprobs = protos.lm:forward{expanded_feats, data.labels}
   -- forward the language model criterion
   local loss = protos.crit:forward(logprobs, data.labels)
-
-  -- forward the ranker model (get sentence embeddings)
-  local similarity_matrix = protos.ranker:forward{expanded_feats, logprobs}
-  -- forward the ranker model criterion
-  local ranker_loss = protos.crit_ranker:forward(similarity_matrix)
-
-
+  
   -----------------------------------------------------------------------------
   -- Backward pass
   -----------------------------------------------------------------------------
-  -- backprop ranker criterion
-  local dmatrix = protos.crit_ranker:backward(similarity_matrix)
-  -- backprop ranker model
-  local dexpanded_feats_1, dlogprobs = unpack(protos.ranker:backward({expanded_feats, logprobs}, dmatrix))
-
   -- backprop criterion
-  dlogprobs = dlogprobs + protos.crit:backward(logprobs, data.labels)
+  local dlogprobs = protos.crit:backward(logprobs, data.labels)
   -- backprop language model
-  local dexpanded_feats_2, ddummy = unpack(protos.lm:backward({expanded_feats, data.labels}, dlogprobs))
-  local dexpanded_feats = dexpanded_feats_1 + dexpanded_feats_2
+  local dexpanded_feats, ddummy = unpack(protos.lm:backward({expanded_feats, data.labels}, dlogprobs))
   -- backprop the CNN, but only if we are finetuning
   if opt.finetune_cnn_after >= 0 and iter >= opt.finetune_cnn_after then
     local dfeats = protos.expander:backward(feats, dexpanded_feats)
@@ -315,7 +291,7 @@ local loss_history = {}
 local val_lang_stats_history = {}
 local val_loss_history = {}
 local best_score
-while true do
+while true do  
 
   -- eval loss/gradient
   local losses = lossFun()
@@ -365,7 +341,7 @@ while true do
         save_protos.lm = thin_lm -- these are shared clones, and point to correct param storage
         save_protos.cnn = thin_cnn
         checkpoint.protos = save_protos
-        -- also include the vocabulary mapping so that we can use the checkpoint
+        -- also include the vocabulary mapping so that we can use the checkpoint 
         -- alone to run on arbitrary images without the data loader
         checkpoint.vocab = loader:getVocab()
         torch.save(checkpoint_path .. '.t7', checkpoint)
