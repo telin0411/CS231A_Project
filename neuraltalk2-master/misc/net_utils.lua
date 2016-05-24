@@ -4,7 +4,7 @@ local net_utils = {}
 -- take a raw CNN from Caffe and perform surgery. Note: VGG-16 SPECIFIC!
 function net_utils.build_resnet(resnet_path, opt)
   local cnn = torch.load(resnet_path)
-  local layer_num = utils.getopt(opt, 'layer_num', 10)
+  local layer_num = utils.getopt(opt, 'layer_num', 13)
   local backend = utils.getopt(opt, 'backend', 'cudnn')
   local encoding_size = utils.getopt(opt, 'encoding_size', 512)
   

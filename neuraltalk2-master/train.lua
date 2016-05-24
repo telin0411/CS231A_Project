@@ -250,6 +250,7 @@ local function lossFun()
   local expanded_feats = protos.expander:forward(feats)
   -- forward the language model
   local logprobs = protos.lm:forward{expanded_feats, data.labels}
+  -- print (logprobs:dim())
   -- forward the language model criterion
   local loss = protos.crit:forward(logprobs, data.labels)
   

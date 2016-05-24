@@ -59,13 +59,10 @@ def plot_scores(val_scores, metrics, id):
         plt.scatter(keys, scores)
         line, = plt.plot(keys, scores, label=metric)
         lines.append(line)
-<<<<<<< HEAD
     plt.legend(lines, loc='upper left', prop={'size': 15})
-=======
-    l1 = plt.legend(handles=lines[:4], loc='lower right', prop={'size': 13})
+    l1 = plt.legend(lines[:4], loc='lower right', prop={'size': 13})
     ax = plt.gca().add_artist(l1)
-    plt.legend(handles=lines[4:], loc='lower center', prop={'size': 13})
->>>>>>> c14a6bc6b024f80a3a6dbf6f17c6e50f74aff6f4
+    plt.legend(lines[4:], loc='lower center', prop={'size': 13})
     plt.xlabel('Num. Iterations'), plt.ylabel('Score')
     plt.title('Validation Scores'), plt.savefig(img)
 
