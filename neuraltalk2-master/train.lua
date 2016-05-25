@@ -11,8 +11,6 @@ require 'misc.LanguageModel'
 local net_utils = require 'misc.net_utils'
 require 'misc.optim_updates'
 
-require 'misc.Ranker'
-
 -------------------------------------------------------------------------------
 -- Input arguments and options
 -------------------------------------------------------------------------------
@@ -129,9 +127,6 @@ else
   -- criterion for the language model
   protos.crit = nn.LanguageModelCriterion()
 
-  -- initialize Ranker
-  protos.ranker = nn.Ranker()
-  protos.crit_ranker = nn.RankerCriterion()
 end
 
 -- ship everything to GPU, maybe
@@ -147,11 +142,6 @@ print('total number of parameters in LM: ', params:nElement())
 print('total number of parameters in CNN: ', cnn_params:nElement())
 assert(params:nElement() == grad_params:nElement())
 assert(cnn_params:nElement() == cnn_grad_params:nElement())
-
--- Ranker parameters
-local ranker_params, ranker_grad_params = protos.ranker:getParameters()
-print('total number of parameters in Ranker: ', ranker_params:nElement())
-assert(ranker_params:nElement() == ranker_grad_params:nElement())
 
 -- construct thin module clones that share parameters with the actual
 -- modules. These thin module will have no intermediates and will be used
@@ -239,7 +229,6 @@ local iter = 0
 local function lossFun()
   protos.cnn:training()
   protos.lm:training()
-  protos.ranker:training()
   grad_params:zero()
   if opt.finetune_cnn_after >= 0 and iter >= opt.finetune_cnn_after then
     cnn_grad_params:zero()
@@ -259,29 +248,18 @@ local function lossFun()
   -- we have to expand out image features, once for each sentence
   local expanded_feats = protos.expander:forward(feats)
   -- forward the language model
-  local logprobs = protos.lm:forward{expanded_feats, data.labels}
+  local logprobs, sim_matrix, sembed = unpack(protos.lm:forward{expanded_feats, data.labels})
   -- forward the language model criterion
-  local loss = protos.crit:forward(logprobs, data.labels)
-
-  -- forward the ranker model (get sentence embeddings)
-  local similarity_matrix = protos.ranker:forward{expanded_feats, logprobs}
-  -- forward the ranker model criterion
-  local ranker_loss = protos.crit_ranker:forward(similarity_matrix)
-
+  local loss = protos.crit:forward({logprobs, sim_matrix}, data.labels)
 
   -----------------------------------------------------------------------------
   -- Backward pass
   -----------------------------------------------------------------------------
-  -- backprop ranker criterion
-  local dmatrix = protos.crit_ranker:backward(similarity_matrix)
-  -- backprop ranker model
-  local dexpanded_feats_1, dlogprobs = unpack(protos.ranker:backward({expanded_feats, logprobs}, dmatrix))
-
   -- backprop criterion
-  dlogprobs = dlogprobs + protos.crit:backward(logprobs, data.labels)
+  local dlogprobs1, dsim_matrix = unpack(protos.crit:backward(logprobs, data.labels))
   -- backprop language model
-  local dexpanded_feats_2, ddummy = unpack(protos.lm:backward({expanded_feats, data.labels}, dlogprobs))
-  local dexpanded_feats = dexpanded_feats_1 + dexpanded_feats_2
+  local dlogprobs2, dsembed, dexpanded_feats, ddummy =
+    unpack(protos.lm:backward({logprobs, sembed, expanded_feats, data.labels}, {dlogprobs1, dsim_matrix}))
   -- backprop the CNN, but only if we are finetuning
   if opt.finetune_cnn_after >= 0 and iter >= opt.finetune_cnn_after then
     local dfeats = protos.expander:backward(feats, dexpanded_feats)
