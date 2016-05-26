@@ -22,10 +22,6 @@ function layer:__init(opt)
   -- create the core lstm network. note +1 for both the START and END tokens
   self.core = LSTM.lstm(self.input_encoding_size, self.vocab_size + 1, self.rnn_size, self.num_layers, dropout)
   self.lookup_table = nn.LookupTable(self.vocab_size + 1, self.input_encoding_size)
-  -- create the linear layer on top of final log probabilities
-  self.linear_module = nn.Linear(self.vocab_size + 1, self.input_encoding_size)
-  self.linear_module.weight:set(self.lookup_table.weight:t())
-  self.linear_module.gradWeight:set(self.lookup_table.gradWeight:t())
   self:_createInitState(1) -- will be lazily resized later during forward passes
 end
 
@@ -58,25 +54,21 @@ function layer:createClones()
 end
 
 function layer:getModulesList()
-  return {self.core, self.lookup_table, self.linear_module}
+  return {self.core, self.lookup_table}
 end
 
 function layer:parameters()
   -- we only have two internal modules, return their params
   local p1,g1 = self.core:parameters()
   local p2,g2 = self.lookup_table:parameters()
-  -- now we have a third one
-  local p3,g3 = self.linear_module:parameters()
 
   local params = {}
   for k,v in pairs(p1) do table.insert(params, v) end
   for k,v in pairs(p2) do table.insert(params, v) end
-  for k,v in pairs(p3) do table.insert(params, v) end
 
   local grad_params = {}
   for k,v in pairs(g1) do table.insert(grad_params, v) end
   for k,v in pairs(g2) do table.insert(grad_params, v) end
-  for k,v in pairs(g3) do table.insert(grad_params, v) end
 
   -- todo: invalidate self.clones if params were requested?
   -- what if someone outside of us decided to call getParameters() or something?
@@ -292,12 +284,9 @@ input is a tuple of:
 2. torch.LongTensor of size DxN, elements 1..M
    where M = opt.vocab_size and D = opt.seq_length
 
-outputs:
-1. a (D+2)xNx(M+1) Tensor giving (normalized) log probabilities for the
+returns a (D+2)xNx(M+1) Tensor giving (normalized) log probabilities for the
 next token at every iteration of the LSTM (+2 because +1 for first dummy
 img forward, and another +1 because of START/END tokens shift)
-2. sim_matrix of size NxN
-3. sembed of size NxK
 --]]
 function layer:updateOutput(input)
   local imgs = input[1]
@@ -307,8 +296,6 @@ function layer:updateOutput(input)
   assert(seq:size(1) == self.seq_length)
   local batch_size = seq:size(2)
   self.output:resize(self.seq_length+2, batch_size, self.vocab_size+1)
-  self.sembed = torch.FloatTensor(batch_size, self.input_encoding_size):zero():cuda()
-  self.sim_matrix = torch.FloatTensor(batch_size, batch_size):zero():cuda()
 
   self:_createInitState(batch_size)
 
@@ -361,45 +348,17 @@ function layer:updateOutput(input)
       self.state[t] = {} -- the rest is state
       for i=1,self.num_state do table.insert(self.state[t], out[i]) end
       self.tmax = t
-      -- Add word embedding for t-th word (find prob from log prob)
-      prob = torch.exp(self.output[t])
-      self.sembed = torch.add(self.sembed, self.linear_module:forward(prob)) -- BUG HERE!
     end
   end
-  self.sembed:div(self.tmax)
-  self.sim_matrix = imgs * self.sembed:t()
 
-  self.outputs = {self.output, self.sim_matrix, self.sembed}
-  return self.outputs
+  return self.output
 end
 
 --[[
-gradOutputs[1] is an (D+2)xNx(M+1) Tensor (dlogprobs1).
-gradOutputs[2] is an NxN Tensor (dsim_matrix)
+gradOutput is an (D+2)xNx(M+1) Tensor.
 --]]
-function layer:updateGradInput(input, gradOutputs)
-  local gradOutput = gradOutputs[1] -- dlogprobs1
-  local dsim_matrix = gradOutputs[2] -- NxN
-  local logprobs = input[1] -- (D+2)xNx(M+1)
-  local probs = torch.exp(logprobs) -- (D+2)xNx(M+1)
-  local sembed = input[2] -- NxK
-  local imgs = input[3]
+function layer:updateGradInput(input, gradOutput)
   local dimgs -- grad on input images
-
-  local seq_length = self.seq_length+2
-  local batch_size = gradOutput:size(2)
-  local vocab_size = self.vocab_size+1
-
-  -- compute gradients for linear module
-  local dsembed = dsim_matrix * imgs -- NxK
-  local dwembeds = torch.repeatTensor(dsembed, self.tmax, 1, 1):div(self.tmax) -- TxNxK
-  local dprobs = torch.FloatTensor(seq_length, batch_size, vocab_size):zero():cuda() -- (D+2)xNx(M+1)
-  -- Correct to access weights this way?? 1,self.tmax or 2,self.tmax??
-  dprobs[{{1,self.tmax}}] =
-    torch.bmm(dwembeds, torch.repeatTensor(self.linear_module.weight, self.tmax, 1, 1))
-  local dlogprobs = torch.cmul(dprobs, probs) -- (D+2)xNx(M+1)
-
-  gradOutput = torch.add(gradOutput, dlogprobs)
 
   -- go backwards and lets compute gradients
   local dstate = {[self.tmax] = self.init_state} -- this works when init_state is all zeros
@@ -421,14 +380,10 @@ function layer:updateGradInput(input, gradOutputs)
       local it = self.lookup_tables_inputs[t]
       self.lookup_tables[t]:backward(it, dxt) -- backprop into lookup table
     end
-    -- backprop linear layer
-    self.linear_module:backward(probs[t], dwembeds[t])
   end
 
-  dimgs = dimgs + dsim_matrix * sembed
-
   -- we have gradient on image, but for LongTensor gt sequence we only create an empty tensor - can't backprop
-  self.gradInput = {dlogprobs, dsembed, imgs, torch.Tensor()}
+  self.gradInput = {dimgs, torch.Tensor()}
   return self.gradInput
 end
 
@@ -451,47 +406,11 @@ in this criterion is as follows:
 The criterion must be able to accomodate variably-sized sequences by making sure
 the gradients are properly set to zeros where appropriate.
 --]]
-function crit:updateOutput(inputs, seq)
-  local input = inputs[1] -- logprobs: (D+2)xNx(M+1)
-  -- convert from CudaTensor to FloatTensor since many operations are not supported for CudaTensor
-  -- e.g. torch.diag()
-  local sim_matrix = inputs[2]:float() -- NxN
-
-  local dlogprobs = torch.FloatTensor(input:size()):zero() -- set to zeros
+function crit:updateOutput(input, seq)
+  self.gradInput:resizeAs(input):zero() -- reset to zeros
   local L,N,Mp1 = input:size(1), input:size(2), input:size(3)
   local D = seq:size(1)
   assert(D == L-2, 'input Tensor should be 2 larger in time')
-
-  -- Compute ranking loss
-  local ranking_loss = 0
-  diag = torch.diag(sim_matrix)
-  diag_row = torch.expand(torch.reshape(diag, N,1), N,N)
-  diag_col = torch.expand(torch.reshape(diag, 1,N), N,N)
-
-  -- Row loss
-  margin_row = torch.cmax(torch.FloatTensor(sim_matrix:size()):zero(), sim_matrix-diag_row+1)
-  margin_row = margin_row - torch.diag(torch.diag(margin_row)) -- set diagonal to 0
-  ranking_loss = ranking_loss + torch.sum(margin_row)
-
-  -- Col loss
-  margin_col = torch.cmax(torch.FloatTensor(sim_matrix:size()):zero(), sim_matrix-diag_col+1)
-  margin_col = margin_col - torch.diag(torch.diag(margin_col)) -- set diagonal to 0
-  ranking_loss = ranking_loss + torch.sum(margin_col)
-
-  ranking_loss = ranking_loss / (N*N)
-
-  -- Compute similarity matrix gradients
-  local dsim_matrix = torch.FloatTensor(N, N):fill(0)
-  margin_row_mask = torch.gt(margin_row, 0):float()
-  dsim_matrix = dsim_matrix + margin_row_mask
-  dsim_matrix = dsim_matrix - torch.diag(torch.sum(margin_row_mask, 2):view(-1))
-
-  margin_col_mask = torch.gt(margin_col, 0):float()
-  dsim_matrix = dsim_matrix + margin_col_mask
-  dsim_matrix = dsim_matrix - torch.diag(torch.sum(margin_col_mask, 1):view(-1))
-
-  dsim_matrix:div(N*N)
-  dsim_matrix = dsim_matrix:cuda() -- convert back to CudaTensor
 
   local loss = 0
   local n = 0
@@ -516,18 +435,14 @@ function crit:updateOutput(inputs, seq)
       if target_index ~= 0 then
         -- accumulate loss
         loss = loss - input[{ t,b,target_index }] -- log(p)
-        dlogprobs[{ t,b,target_index }] = -1
+        self.gradInput[{ t,b,target_index }] = -1
         n = n + 1
       end
 
     end
   end
-  -- self.output = loss / n -- normalize by number of predictions that were made
-  -- self.output = self.output + ranking_loss
-  self.output = {loss/n, ranking_loss}
-  dlogprobs:div(n)
-  dlogprobs = dlogprobs:cuda()
-  self.gradInput = {dlogprobs, dsim_matrix}
+  self.output = loss / n -- normalize by number of predictions that were made
+  self.gradInput:div(n)
   return self.output
 end
 

@@ -8,6 +8,7 @@ require 'loadcaffe'
 local utils = require 'misc.utils'
 require 'misc.DataLoader'
 require 'misc.LanguageModel'
+require 'misc.Ranker'
 local net_utils = require 'misc.net_utils'
 require 'misc.optim_updates'
 
@@ -105,6 +106,12 @@ if string.len(opt.start_from) > 0 then
   protos.expander = nn.FeatExpander(opt.seq_per_img) -- not in checkpoints, create manually
 else
   -- create protos from scratch
+  --initialize ranker model
+  local rankerOpt = {}
+  rankerOpt.vocab_size = loader:getVocabSize()
+  rankerOpt.input_encoding_size = opt.input_encoding_size
+  rankerOpt.seq_length = loader:getSeqLength()
+  protos.ranker = nn.Ranker(rankerOpt)
   -- intialize language model
   local lmOpt = {}
   lmOpt.vocab_size = loader:getVocabSize()
@@ -126,7 +133,12 @@ else
   protos.expander = nn.FeatExpander(opt.seq_per_img)
   -- criterion for the language model
   protos.crit = nn.LanguageModelCriterion()
+  --criterion for the ranker model
+  protos.crit_ranker = nn.RankerCriterion()
 
+  -- Ranker linear layer share weights with LM lookup table
+  protos.ranker.linear_module.weight:set(protos.lm.lookup_table.weight:t())
+  protos.ranker.linear_module.gradWeight:set(protos.lm.lookup_table.gradWeight:t())
 end
 
 -- ship everything to GPU, maybe
@@ -138,10 +150,13 @@ end
 -- Keep CNN params separate in case we want to try to get fancy with different optims on LM/CNN
 local params, grad_params = protos.lm:getParameters()
 local cnn_params, cnn_grad_params = protos.cnn:getParameters()
+local ranker_params, ranker_grad_params = protos.ranker:getParameters()
 print('total number of parameters in LM: ', params:nElement())
 print('total number of parameters in CNN: ', cnn_params:nElement())
+print('total number of parameters in Ranker: ', ranker_params:nElement())
 assert(params:nElement() == grad_params:nElement())
 assert(cnn_params:nElement() == cnn_grad_params:nElement())
+assert(ranker_params:nElement() == ranker_grad_params:nElement())
 
 -- construct thin module clones that share parameters with the actual
 -- modules. These thin module will have no intermediates and will be used
@@ -150,10 +165,14 @@ local thin_lm = protos.lm:clone()
 thin_lm.core:share(protos.lm.core, 'weight', 'bias') -- TODO: we are assuming that LM has specific members! figure out clean way to get rid of, not modular.
 thin_lm.lookup_table:share(protos.lm.lookup_table, 'weight', 'bias')
 local thin_cnn = protos.cnn:clone('weight', 'bias')
+local thin_ranker = protos.ranker:clone()
+thin_ranker.linear_module:share(protos.ranker.linear_module, 'weight', 'bias')
 -- sanitize all modules of gradient storage so that we dont save big checkpoints
 net_utils.sanitize_gradients(thin_cnn)
 local lm_modules = thin_lm:getModulesList()
 for k,v in pairs(lm_modules) do net_utils.sanitize_gradients(v) end
+local ranker_modules = thin_ranker:getModulesList()
+for k,v in pairs(ranker_modules) do net_utils.sanitize_gradients(v) end
 
 -- create clones and ensure parameter sharing. we have to do this
 -- all the way here at the end because calls such as :cuda() and
@@ -186,8 +205,10 @@ local function eval_split(split, evalopt)
     -- forward the model to get loss
     local feats = protos.cnn:forward(data.images)
     local expanded_feats = protos.expander:forward(feats)
-    local logprobs, sim_matrix, sembed = unpack(protos.lm:forward{expanded_feats, data.labels})
-    local loss_softmax, loss_ranking = unpack(protos.crit:forward({logprobs, sim_matrix}, data.labels))
+    local logprobs = protos.lm:forward{expanded_feats, data.labels}
+    local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, protos.lm.tmax})
+    local loss_softmax = protos.crit:forward(logprobs, data.labels)
+    local loss_ranking = protos.crit_ranker:forward(sim_matrix, torch.Tensor())
     local loss = loss_softmax + loss_ranking
 
     loss_sum = loss_sum + loss
@@ -231,6 +252,7 @@ local iter = 0
 local function lossFun()
   protos.cnn:training()
   protos.lm:training()
+  protos.ranker:training()
   grad_params:zero()
   if opt.finetune_cnn_after >= 0 and iter >= opt.finetune_cnn_after then
     cnn_grad_params:zero()
@@ -250,19 +272,30 @@ local function lossFun()
   -- we have to expand out image features, once for each sentence
   local expanded_feats = protos.expander:forward(feats)
   -- forward the language model
-  local logprobs, sim_matrix, sembed = unpack(protos.lm:forward{expanded_feats, data.labels})
+  local logprobs = protos.lm:forward{expanded_feats, data.labels}
+  -- forward the ranker model
+  local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, protos.lm.tmax})
   -- forward the language model criterion
-  local loss_softmax, loss_ranking = unpack(protos.crit:forward({logprobs, sim_matrix}, data.labels))
+  local loss_softmax = protos.crit:forward(logprobs, data.labels)
+  -- forward the ranker model criterion
+  local loss_ranking = protos.crit_ranker:forward(sim_matrix, torch.Tensor())
   local loss = loss_softmax + loss_ranking
 
   -----------------------------------------------------------------------------
   -- Backward pass
   -----------------------------------------------------------------------------
-  -- backprop criterion
-  local dlogprobs1, dsim_matrix = unpack(protos.crit:backward(logprobs, data.labels))
+  -- backprop ranker criterion
+  local dsim_matrix = protos.crit_ranker:backward(sim_matrix, torch.Tensor())
+  -- backprop language criterion
+  local dlogprobs_lm = protos.crit:backward(logprobs, data.labels)
+  -- backprop ranker model
+  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker =
+    unpack(protos.ranker:backward({logprobs, sembed, expanded_feats}, dsim_matrix))
+  local dlogprobs = dlogprobs_lm + dlogprobs_ranker
   -- backprop language model
-  local dlogprobs2, dsembed, dexpanded_feats, ddummy =
-    unpack(protos.lm:backward({logprobs, sembed, expanded_feats, data.labels}, {dlogprobs1, dsim_matrix}))
+  local dexpanded_feats_lm, ddummy =
+    unpack(protos.lm:backward({expanded_feats, data.labels}, dlogprobs))
+  local dexpanded_feats = dexpanded_feats_lm + dexpanded_feats_ranker
   -- backprop the CNN, but only if we are finetuning
   if opt.finetune_cnn_after >= 0 and iter >= opt.finetune_cnn_after then
     local dfeats = protos.expander:backward(feats, dexpanded_feats)
@@ -345,6 +378,7 @@ while true do
         local save_protos = {}
         save_protos.lm = thin_lm -- these are shared clones, and point to correct param storage
         save_protos.cnn = thin_cnn
+        save_protos.ranker = thin_ranker
         checkpoint.protos = save_protos
         -- also include the vocabulary mapping so that we can use the checkpoint
         -- alone to run on arbitrary images without the data loader
