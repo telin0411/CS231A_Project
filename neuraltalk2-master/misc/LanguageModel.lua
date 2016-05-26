@@ -26,7 +26,6 @@ function layer:__init(opt)
   self.linear_module = nn.Linear(self.vocab_size + 1, self.input_encoding_size)
   self.linear_module.weight:set(self.lookup_table.weight:t())
   self.linear_module.gradWeight:set(self.lookup_table.gradWeight:t())
-  -- self.linear_module:cuda()
   print("Linear layer size:")
   print(self.linear_module)
   self:_createInitState(1) -- will be lazily resized later during forward passes
@@ -310,8 +309,8 @@ function layer:updateOutput(input)
   assert(seq:size(1) == self.seq_length)
   local batch_size = seq:size(2)
   self.output:resize(self.seq_length+2, batch_size, self.vocab_size+1)
-  self.sembed = torch.DoubleTensor(batch_size, self.input_encoding_size):zero()
-  self.sim_matrix = torch.DoubleTensor(batch_size, batch_size):zero()
+  self.sembed = torch.FloatTensor(batch_size, self.input_encoding_size):zero():cuda()
+  self.sim_matrix = torch.FloatTensor(batch_size, batch_size):zero():cuda()
 
   print("Logprobs size:")
   print(self.output:size())
@@ -369,15 +368,11 @@ function layer:updateOutput(input)
       self.tmax = t
       -- Add word embedding for t-th word (find prob from log prob)
       prob = torch.exp(self.output[t])
-      -- DEBUGGING
-      -- module = nn.Linear(9568, 512):cuda()
-      -- prob = torch.FloatTensor(80, 9568):cuda()
-      -- module:forward(prob)
-      self.sembed = self.sembed + self.linear_module:forward(prob) -- BUG HERE!
+      self.sembed = torch.add(self.sembed, self.linear_module:forward(prob)) -- BUG HERE!
     end
   end
   self.sembed:div(self.tmax)
-  self.sim_matrix = imgs:t() * self.sembed
+  self.sim_matrix = imgs * self.sembed:t()
 
   self.outputs = {self.output, self.sim_matrix, self.sembed}
   return self.outputs
@@ -403,9 +398,10 @@ function layer:updateGradInput(input, gradOutputs)
   -- compute gradients for linear module
   local dsembed = dsim_matrix * imgs -- NxK
   local dwembeds = torch.repeatTensor(dsembed, self.tmax, 1, 1):div(self.tmax) -- TxNxK
-  local dprobs = torch.DoubleTensor(seq_length, batch_size, vocab_size):zero() -- (D+2)xNx(M+1)
+  local dprobs = torch.FloatTensor(seq_length, batch_size, vocab_size):zero() -- (D+2)xNx(M+1)
   -- Correct to access weights this way?? 1,self.tmax or 2,self.tmax??
-  dprobs[{{1,self.tmax}}] = dwembeds * self.linear_module.weight:t()
+  dprobs[{{1,self.tmax}}] =
+    torch.bmm(dwembeds, torch.repeatTensor(self.linear_module.weight, self.tmax, 1, 1))
   local dlogprobs = torch.cmul(dprobs, probs) -- (D+2)xNx(M+1)
 
   gradOutput = gradOutput + dlogprobs
@@ -462,9 +458,11 @@ the gradients are properly set to zeros where appropriate.
 --]]
 function crit:updateOutput(inputs, seq)
   local input = inputs[1] -- logprobs: (D+2)xNx(M+1)
-  local sim_matrix = inputs[2] -- NxN
+  -- convert from CudaTensor to FloatTensor since many operations are not supported for CudaTensor
+  -- e.g. torch.diag()
+  local sim_matrix = inputs[2]:float() -- NxN
 
-  local dlogprobs = torch.DoubleTensor(input:size()):zero() -- set to zeros
+  local dlogprobs = torch.FloatTensor(input:size()):zero() -- set to zeros
   local L,N,Mp1 = input:size(1), input:size(2), input:size(3)
   local D = seq:size(1)
   assert(D == L-2, 'input Tensor should be 2 larger in time')
@@ -476,24 +474,25 @@ function crit:updateOutput(inputs, seq)
   diag_col = torch.expand(torch.reshape(diag, 1,N), N,N)
 
   -- Row loss
-  margin_row = torch.cmax(torch.DoubleTensor(sim_matrix:size()):zero(), sim_matrix-diag_row+1)
+  margin_row = torch.cmax(torch.FloatTensor(sim_matrix:size()):zero(), sim_matrix-diag_row+1)
   margin_row = margin_row - torch.diag(torch.diag(margin_row)) -- set diagonal to 0
   ranking_loss = ranking_loss + torch.sum(margin_row)
 
   -- Col loss
-  margin_col = torch.cmax(torch.DoubleTensor(sim_matrix:size()):zero(), sim_matrix-diag_col+1)
+  margin_col = torch.cmax(torch.FloatTensor(sim_matrix:size()):zero(), sim_matrix-diag_col+1)
   margin_col = margin_col - torch.diag(torch.diag(margin_col)) -- set diagonal to 0
   ranking_loss = ranking_loss + torch.sum(margin_col)
 
   -- Compute similarity matrix gradients
-  local dsim_matrix = torch.DoubleTensor(N, N):fill(0)
-  margin_row_mask = torch.gt(margin_row, 0):double()
+  local dsim_matrix = torch.FloatTensor(N, N):fill(0)
+  margin_row_mask = torch.gt(margin_row, 0):float()
   dsim_matrix = dsim_matrix + margin_row_mask
   dsim_matrix = dsim_matrix - torch.diag(torch.sum(margin_row_mask, 2):view(-1))
 
-  margin_col_mask = torch.gt(margin_col, 0):double()
+  margin_col_mask = torch.gt(margin_col, 0):float()
   dsim_matrix = dsim_matrix + margin_col_mask
   dsim_matrix = dsim_matrix - torch.diag(torch.sum(margin_col_mask, 1):view(-1))
+  dsim_matrix = dsim_matrix:cuda() -- convert back to CudaTensor
 
   local loss = 0
   local n = 0
