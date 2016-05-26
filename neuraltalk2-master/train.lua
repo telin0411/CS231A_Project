@@ -186,8 +186,10 @@ local function eval_split(split, evalopt)
     -- forward the model to get loss
     local feats = protos.cnn:forward(data.images)
     local expanded_feats = protos.expander:forward(feats)
-    local logprobs = protos.lm:forward{expanded_feats, data.labels}
-    local loss = protos.crit:forward(logprobs, data.labels)
+    local logprobs, sim_matrix, sembed = unpack(protos.lm:forward{expanded_feats, data.labels})
+    local loss_softmax, loss_ranking = unpack(protos.crit:forward({logprobs, sim_matrix}, data.labels))
+    local loss = loss_softmax + loss_ranking
+
     loss_sum = loss_sum + loss
     loss_evals = loss_evals + 1
 
@@ -280,7 +282,7 @@ local function lossFun()
   -----------------------------------------------------------------------------
 
   -- and lets get out!
-  local losses = { total_loss = loss }
+  local losses = { total_loss = loss, softmax_loss = loss_softmax, ranking_loss = loss_ranking }
   return losses
 end
 
@@ -299,7 +301,7 @@ while true do
   -- eval loss/gradient
   local losses = lossFun()
   if iter % opt.losses_log_every == 0 then loss_history[iter] = losses.total_loss end
-  print(string.format('iter %d: %f', iter, losses.total_loss))
+  print(string.format('iter %d: %f softmax: %f ranking: %f', iter, losses.total_loss, losses.softmax_loss, losses.ranking_loss))
 
   -- save checkpoint once in a while (or on final iteration)
   if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then

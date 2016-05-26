@@ -310,9 +310,6 @@ function layer:updateOutput(input)
   self.sembed = torch.FloatTensor(batch_size, self.input_encoding_size):zero():cuda()
   self.sim_matrix = torch.FloatTensor(batch_size, batch_size):zero():cuda()
 
-  print("Logprobs size:")
-  print(self.output:size())
-
   self:_createInitState(batch_size)
 
   self.state = {[0] = self.init_state}
