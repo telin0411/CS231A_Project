@@ -108,7 +108,11 @@ input: similarity matrix, size NxN
 function crit:updateOutput(input, seq)
   -- convert from CudaTensor to FloatTensor since many operations are not
   -- supported for CudaTensor. e.g. torch.diag()
-  local sim_matrix = input:float() -- NxN
+  local sim_matrix = input[1] -- NxN
+  local gpuid = input[2]
+  if gpuid >= 0 then
+    sim_matrix = sim_matrix:float()
+  end
   N = sim_matrix:size(1)
 
   local ranking_loss = 0
@@ -139,7 +143,9 @@ function crit:updateOutput(input, seq)
   dsim_matrix = dsim_matrix - torch.diag(torch.sum(margin_col_mask, 1):view(-1))
 
   dsim_matrix:div(N*N)
-  dsim_matrix = dsim_matrix:cuda() -- convert back to CudaTensor
+  if gpuid >= 0 then
+    dsim_matrix = dsim_matrix:cuda() -- convert back to CudaTensor
+  end
 
   self.output = ranking_loss
   self.gradInput = dsim_matrix

@@ -47,6 +47,8 @@ cmd:option('-learning_rate_decay_every', 50000, 'every how many iterations there
 cmd:option('-optim_alpha',0.8,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
+-- Optimization: for the Ranker Model
+cmd:option('-ranker_learning_rate',1e-6,'learning rate for the Ranker')
 -- Optimization: for the CNN
 cmd:option('-cnn_optim','adam','optimization to use for CNN')
 cmd:option('-cnn_optim_alpha',0.8,'alpha for momentum of CNN')
@@ -102,7 +104,10 @@ if string.len(opt.start_from) > 0 then
   net_utils.unsanitize_gradients(protos.cnn)
   local lm_modules = protos.lm:getModulesList()
   for k,v in pairs(lm_modules) do net_utils.unsanitize_gradients(v) end
+  local ranker_module = protos.ranker:getModulesList()
+  for k,v in pairs(ranker_module) do net_utils.unsanitize_gradients(v) end
   protos.crit = nn.LanguageModelCriterion() -- not in checkpoints, create manually
+  protos.crit_ranker = nn.RankerCriterion()
   protos.expander = nn.FeatExpander(opt.seq_per_img) -- not in checkpoints, create manually
 else
   -- create protos from scratch
@@ -189,6 +194,7 @@ local function eval_split(split, evalopt)
 
   protos.cnn:evaluate()
   protos.lm:evaluate()
+  protos.ranker:evaluate()
   loader:resetIterator(split) -- rewind iteator back to first datapoint in the split
   local n = 0
   local loss_sum = 0
@@ -208,7 +214,7 @@ local function eval_split(split, evalopt)
     local logprobs = protos.lm:forward{expanded_feats, data.labels}
     local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, protos.lm.tmax})
     local loss_softmax = protos.crit:forward(logprobs, data.labels)
-    local loss_ranking = protos.crit_ranker:forward(sim_matrix, torch.Tensor())
+    local loss_ranking = protos.crit_ranker:forward({sim_matrix, opt.gpuid}, torch.Tensor())
     local loss = loss_softmax + loss_ranking
 
     loss_sum = loss_sum + loss
@@ -279,7 +285,7 @@ local function lossFun()
   -- forward the language model criterion
   local loss_softmax = protos.crit:forward(logprobs, data.labels)
   -- forward the ranker model criterion
-  local loss_ranking = protos.crit_ranker:forward(sim_matrix, torch.Tensor())
+  local loss_ranking = protos.crit_ranker:forward({sim_matrix, opt.gpuid}, torch.Tensor())
   local loss = loss_softmax + loss_ranking
 
   -----------------------------------------------------------------------------
@@ -395,6 +401,7 @@ while true do
   -- decay the learning rate for both LM and CNN
   local learning_rate = opt.learning_rate
   local cnn_learning_rate = opt.cnn_learning_rate
+  local ranker_learning_rate = opt.ranker_learning_rate
   if iter > opt.learning_rate_decay_start and opt.learning_rate_decay_start >= 0 then
     local frac = (iter - opt.learning_rate_decay_start) / opt.learning_rate_decay_every
     local decay_factor = math.pow(0.5, frac)
@@ -405,22 +412,22 @@ while true do
   -- perform a parameter update
   if opt.optim == 'rmsprop' then
     rmsprop(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state)
-    rmsprop(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, ranker_optim_state)
+    rmsprop(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, opt.optim_epsilon, ranker_optim_state)
   elseif opt.optim == 'adagrad' then
     adagrad(params, grad_params, learning_rate, opt.optim_epsilon, optim_state)
-    adagrad(ranker_params, ranker_grad_params, learning_rate, opt.optim_epsilon, ranker_optim_state)
+    adagrad(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_epsilon, ranker_optim_state)
   elseif opt.optim == 'sgd' then
     sgd(params, grad_params, opt.learning_rate)
-    sgd(ranker_params, ranker_grad_params, opt.learning_rate)
+    sgd(ranker_params, ranker_grad_params, ranker_learning_rate)
   elseif opt.optim == 'sgdm' then
     sgdm(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
-    sgdm(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, ranker_optim_state)
+    sgdm(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, ranker_optim_state)
   elseif opt.optim == 'sgdmom' then
     sgdmom(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
-    sgdmom(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, ranker_optim_state)
+    sgdmom(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, ranker_optim_state)
   elseif opt.optim == 'adam' then
     adam(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, optim_state)
-    adam(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, ranker_optim_state)
+    adam(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, ranker_optim_state)
   else
     error('bad option opt.optim')
   end
