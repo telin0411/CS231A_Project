@@ -254,6 +254,7 @@ local function lossFun()
   protos.lm:training()
   protos.ranker:training()
   grad_params:zero()
+  ranker_grad_params:zero()
   if opt.finetune_cnn_after >= 0 and iter >= opt.finetune_cnn_after then
     cnn_grad_params:zero()
   end
@@ -305,6 +306,7 @@ local function lossFun()
   -- clip gradients
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))
   grad_params:clamp(-opt.grad_clip, opt.grad_clip)
+  ranker_grad_params:clamp(-opt.grad_clip, opt.grad_clip)
 
   -- apply L2 regularization
   if opt.cnn_weight_decay > 0 then
@@ -402,16 +404,22 @@ while true do
   -- perform a parameter update
   if opt.optim == 'rmsprop' then
     rmsprop(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state)
+    rmsprop(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state)
   elseif opt.optim == 'adagrad' then
     adagrad(params, grad_params, learning_rate, opt.optim_epsilon, optim_state)
+    adagrad(ranker_params, ranker_grad_params, learning_rate, opt.optim_epsilon, optim_state)
   elseif opt.optim == 'sgd' then
     sgd(params, grad_params, opt.learning_rate)
+    sgd(ranker_params, ranker_grad_params, opt.learning_rate)
   elseif opt.optim == 'sgdm' then
     sgdm(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
+    sgdm(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, optim_state)
   elseif opt.optim == 'sgdmom' then
     sgdmom(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
+    sgdmom(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, optim_state)
   elseif opt.optim == 'adam' then
     adam(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, optim_state)
+    adam(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, optim_state)
   else
     error('bad option opt.optim')
   end
