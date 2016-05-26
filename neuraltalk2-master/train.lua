@@ -327,6 +327,7 @@ end
 local loss0
 local optim_state = {}
 local cnn_optim_state = {}
+local ranker_optim_state = {}
 local loss_history = {}
 local val_lang_stats_history = {}
 local val_loss_history = {}
@@ -404,22 +405,22 @@ while true do
   -- perform a parameter update
   if opt.optim == 'rmsprop' then
     rmsprop(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state)
-    rmsprop(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state)
+    rmsprop(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, ranker_optim_state)
   elseif opt.optim == 'adagrad' then
     adagrad(params, grad_params, learning_rate, opt.optim_epsilon, optim_state)
-    adagrad(ranker_params, ranker_grad_params, learning_rate, opt.optim_epsilon, optim_state)
+    adagrad(ranker_params, ranker_grad_params, learning_rate, opt.optim_epsilon, ranker_optim_state)
   elseif opt.optim == 'sgd' then
     sgd(params, grad_params, opt.learning_rate)
     sgd(ranker_params, ranker_grad_params, opt.learning_rate)
   elseif opt.optim == 'sgdm' then
     sgdm(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
-    sgdm(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, optim_state)
+    sgdm(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, ranker_optim_state)
   elseif opt.optim == 'sgdmom' then
     sgdmom(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
-    sgdmom(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, optim_state)
+    sgdmom(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, ranker_optim_state)
   elseif opt.optim == 'adam' then
     adam(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, optim_state)
-    adam(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, optim_state)
+    adam(ranker_params, ranker_grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, ranker_optim_state)
   else
     error('bad option opt.optim')
   end
