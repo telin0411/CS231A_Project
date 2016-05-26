@@ -250,7 +250,8 @@ local function lossFun()
   -- forward the language model
   local logprobs, sim_matrix, sembed = unpack(protos.lm:forward{expanded_feats, data.labels})
   -- forward the language model criterion
-  local loss = protos.crit:forward({logprobs, sim_matrix}, data.labels)
+  local loss_softmax, loss_ranking = unpack(protos.crit:forward({logprobs, sim_matrix}, data.labels))
+  local loss = loss_softmax + loss_ranking
 
   -----------------------------------------------------------------------------
   -- Backward pass

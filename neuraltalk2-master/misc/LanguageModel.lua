@@ -26,8 +26,6 @@ function layer:__init(opt)
   self.linear_module = nn.Linear(self.vocab_size + 1, self.input_encoding_size)
   self.linear_module.weight:set(self.lookup_table.weight:t())
   self.linear_module.gradWeight:set(self.lookup_table.gradWeight:t())
-  print("Linear layer size:")
-  print(self.linear_module)
   self:_createInitState(1) -- will be lazily resized later during forward passes
 end
 
@@ -398,13 +396,13 @@ function layer:updateGradInput(input, gradOutputs)
   -- compute gradients for linear module
   local dsembed = dsim_matrix * imgs -- NxK
   local dwembeds = torch.repeatTensor(dsembed, self.tmax, 1, 1):div(self.tmax) -- TxNxK
-  local dprobs = torch.FloatTensor(seq_length, batch_size, vocab_size):zero() -- (D+2)xNx(M+1)
+  local dprobs = torch.FloatTensor(seq_length, batch_size, vocab_size):zero():cuda() -- (D+2)xNx(M+1)
   -- Correct to access weights this way?? 1,self.tmax or 2,self.tmax??
   dprobs[{{1,self.tmax}}] =
     torch.bmm(dwembeds, torch.repeatTensor(self.linear_module.weight, self.tmax, 1, 1))
   local dlogprobs = torch.cmul(dprobs, probs) -- (D+2)xNx(M+1)
 
-  gradOutput = gradOutput + dlogprobs
+  gradOutput = torch.add(gradOutput, dlogprobs)
 
   -- go backwards and lets compute gradients
   local dstate = {[self.tmax] = self.init_state} -- this works when init_state is all zeros
@@ -483,6 +481,8 @@ function crit:updateOutput(inputs, seq)
   margin_col = margin_col - torch.diag(torch.diag(margin_col)) -- set diagonal to 0
   ranking_loss = ranking_loss + torch.sum(margin_col)
 
+  ranking_loss = ranking_loss / (N*N)
+
   -- Compute similarity matrix gradients
   local dsim_matrix = torch.FloatTensor(N, N):fill(0)
   margin_row_mask = torch.gt(margin_row, 0):float()
@@ -492,6 +492,8 @@ function crit:updateOutput(inputs, seq)
   margin_col_mask = torch.gt(margin_col, 0):float()
   dsim_matrix = dsim_matrix + margin_col_mask
   dsim_matrix = dsim_matrix - torch.diag(torch.sum(margin_col_mask, 1):view(-1))
+
+  dsim_matrix:div(N*N)
   dsim_matrix = dsim_matrix:cuda() -- convert back to CudaTensor
 
   local loss = 0
@@ -523,9 +525,11 @@ function crit:updateOutput(inputs, seq)
 
     end
   end
-  self.output = loss / n -- normalize by number of predictions that were made
-  self.output = self.output + ranking_loss
+  -- self.output = loss / n -- normalize by number of predictions that were made
+  -- self.output = self.output + ranking_loss
+  self.output = {loss/n, ranking_loss}
   dlogprobs:div(n)
+  dlogprobs = dlogprobs:cuda()
   self.gradInput = {dlogprobs, dsim_matrix}
   return self.output
 end
