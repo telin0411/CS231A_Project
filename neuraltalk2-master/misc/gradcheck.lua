@@ -22,13 +22,13 @@ function gradcheck.numeric_gradient(f, x, df, eps)
   local dx_num_flat = dx_num:view(n)
   for i = 1, n do
     local orig = x_flat[i]
-    
+
     x_flat[i] = orig + eps
     local pos = f(x)
     if torch.isTensor(df) then
       pos = pos:clone()
     end
-    
+
     x_flat[i] = orig - eps
     local neg = f(x)
     if torch.isTensor(df) then
@@ -41,7 +41,7 @@ function gradcheck.numeric_gradient(f, x, df, eps)
     else
       d = df * (pos - neg) / (2 * eps)
     end
-    
+
     dx_num_flat[i] = d
     x_flat[i] = orig
   end
@@ -98,5 +98,3 @@ end
 
 
 return gradcheck
-
-  
