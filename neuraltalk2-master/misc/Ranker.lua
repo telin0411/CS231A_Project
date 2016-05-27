@@ -124,10 +124,10 @@ function crit:updateOutput(input, seq)
   margin_col = margin_col - utils.diag(utils.diag(margin_col)) -- set diagonal to 0
   ranking_loss = ranking_loss + torch.sum(margin_col)
 
-  ranking_loss = ranking_loss / (N*N)
+  ranking_loss = ranking_loss / N
 
   -- Compute similarity matrix gradients
-  self.gradInput:resizeAs(input):zero() -- reset to zeros
+  self.gradInput:resizeAs(input):zero():type(input:type()) -- reset to zeros
   margin_row_mask = torch.gt(margin_row, 0):type(input:type())
   self.gradInput = self.gradInput + margin_row_mask
   self.gradInput = self.gradInput - utils.diag(torch.sum(margin_row_mask, 2):view(-1))
@@ -136,7 +136,7 @@ function crit:updateOutput(input, seq)
   self.gradInput = self.gradInput + margin_col_mask
   self.gradInput = self.gradInput - utils.diag(torch.sum(margin_col_mask, 1):view(-1))
 
-  self.gradInput:div(N*N)
+  self.gradInput:div(N)
 
   self.output = ranking_loss
   return self.output
