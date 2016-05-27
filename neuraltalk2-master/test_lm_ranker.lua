@@ -285,35 +285,45 @@ local function overfit()
   local expected_params = lstm_params + output_params + table_params + ranker_linear_params
   print('expected:', expected_params)
 
+  local reg_ranker = 1
+  local reg_softmax = 0
   local function lossFun()
     grad_params:zero()
     local output = lm:forward{imgs, seq}
-    local loss = crit:forward(output, seq)
+    local softmax_loss = crit:forward(output, seq)
+    softmax_loss = softmax_loss * reg_softmax
     local sim_matrix, sembed = unpack(ranker:forward{imgs, output, lm.tmax})
     local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
+    ranking_loss = ranking_loss * reg_ranker
     local gradOutput = crit:backward(output, seq)
+    gradOutput = gradOutput * reg_softmax
     local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
+    dsim_matrix = dsim_matrix * reg_ranker
     local dlogprobs_ranker, dsembed, dimgs_ranker =
       unpack(ranker:backward({output, sembed, imgs}, dsim_matrix))
     gradOutput = torch.add(gradOutput, dlogprobs_ranker)
-    loss = loss + ranking_loss
+    local loss = softmax_loss + ranking_loss
     lm:backward({imgs, seq}, gradOutput)
-    return loss
+    return {loss, softmax_loss, ranking_loss}
   end
 
   local loss
   local grad_cache = grad_params:clone():fill(1e-8)
   local ranker_grad_cache = ranker_grad_params:clone():fill(1e-8)
   print('trying to overfit the language model on toy data:')
-  for t=1,500 do
+  local t = 0
+  loss = lossFun()
+  while loss[1] > 1 do
+  -- for t=1,1000 do
+    t = t + 1
     loss = lossFun()
     -- test that initial loss makes sense
-    if t == 1 then tester:assertlt(math.abs(math.log(opt.vocab_size+1) - loss), 0.1) end
+    if t == 1 then tester:assertlt(math.abs(math.log(opt.vocab_size+1) - loss[1]), 0.1) end
     grad_cache:addcmul(1, grad_params, grad_params)
     ranker_grad_cache:addcmul(1, ranker_grad_params, ranker_grad_params)
     params:addcdiv(-1e-1, grad_params, torch.sqrt(grad_cache)) -- adagrad update
-    ranker_params:addcdiv(-1e-2, ranker_grad_params, torch.sqrt(ranker_grad_cache)) -- adagrad update
-    print(string.format('iteration %d/30: loss %f', t, loss))
+    ranker_params:addcdiv(-1e-3, ranker_grad_params, torch.sqrt(ranker_grad_cache)) -- adagrad update
+    print(string.format('iteration %d/30: loss %f softmax %f ranking %f', t, loss[1], loss[2], loss[3]))
   end
   -- holy crap adagrad destroys the loss function!
 
