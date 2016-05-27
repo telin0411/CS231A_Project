@@ -83,7 +83,7 @@ function layer:updateGradInput(input, gradOutput)
   local dimgs = dsim_matrix * sembed
   local dsembed = dsim_matrix * imgs -- NxK
   local dsum = self.linear_module:backward(sum, dsembed) -- Nx(M+1)
-  local dprobs = utils.createTensor(gradOutput:type(), probs:size()):zero() -- (D+2)xNx(M+1)
+  local dprobs = utils.createTensor(gradOutput:type(), probs:size()) -- (D+2)xNx(M+1)
   -- correct way to access weights?? 1,self.tmax or 2,self.tmax??
   dprobs[{{1,self.tmax}}] = torch.repeatTensor(dsum, self.tmax, 1, 1):div(self.tmax)
   local dlogprobs = torch.cmul(dprobs, probs) -- (D+2)xNx(M+1)
