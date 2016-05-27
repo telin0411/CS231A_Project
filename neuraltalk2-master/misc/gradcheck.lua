@@ -34,12 +34,16 @@ function gradcheck.numeric_gradient(f, x, df, eps)
     if torch.isTensor(df) then
       neg = neg:clone()
     end
-    
+
     local d = nil
     if torch.isTensor(df) then
       d = torch.dot(pos - neg, df) / (2 * eps)
     else
-      d = df * (pos - neg) / (2 * eps)
+        local diff = pos - neg
+        if (torch.isTensor(diff)) then
+            diff = torch.sum(diff)
+        end
+      d = df * diff / (2 * eps)
     end
 
     dx_num_flat[i] = d
