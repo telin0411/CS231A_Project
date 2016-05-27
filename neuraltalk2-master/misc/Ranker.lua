@@ -83,7 +83,7 @@ function layer:updateGradInput(input, gradOutput)
   local dimgs = dsim_matrix * sembed
   local dsembed = dsim_matrix * imgs -- NxK
   local dsum = self.linear_module:backward(sum, dsembed) -- Nx(M+1)
-  local dprobs = torch.FloatTensor(probs:size()):zero():cuda() -- (D+2)xNx(M+1)
+  local dprobs = utils.createTensor(gradOutput:type(), probs:size()):zero() -- (D+2)xNx(M+1)
   -- correct way to access weights?? 1,self.tmax or 2,self.tmax??
   dprobs[{{1,self.tmax}}] = torch.repeatTensor(dsum, self.tmax, 1, 1):div(self.tmax)
   local dlogprobs = torch.cmul(dprobs, probs) -- (D+2)xNx(M+1)
@@ -106,49 +106,39 @@ end
 input: similarity matrix, size NxN
 --]]
 function crit:updateOutput(input, seq)
-  -- convert from CudaTensor to FloatTensor since many operations are not
-  -- supported for CudaTensor. e.g. torch.diag()
-  local sim_matrix = input[1] -- NxN
-  local gpuid = input[2]
-  if gpuid >= 0 then
-    sim_matrix = sim_matrix:float()
-  end
+  local sim_matrix = input
   N = sim_matrix:size(1)
 
   local ranking_loss = 0
-  diag = torch.diag(sim_matrix)
+  diag = utils.diag(sim_matrix)
   diag_row = torch.expand(torch.reshape(diag, N,1), N,N)
   diag_col = torch.expand(torch.reshape(diag, 1,N), N,N)
 
   -- Row loss
-  margin_row = torch.cmax(torch.FloatTensor(sim_matrix:size()):zero(), sim_matrix-diag_row+1)
-  margin_row = margin_row - torch.diag(torch.diag(margin_row)) -- set diagonal to 0
+  margin_row = torch.cmax(sim_matrix-diag_row+1, 0)
+  margin_row = margin_row - utils.diag(utils.diag(margin_row)) -- set diagonal to 0
   ranking_loss = ranking_loss + torch.sum(margin_row)
 
   -- Col loss
-  margin_col = torch.cmax(torch.FloatTensor(sim_matrix:size()):zero(), sim_matrix-diag_col+1)
-  margin_col = margin_col - torch.diag(torch.diag(margin_col)) -- set diagonal to 0
+  margin_col = torch.cmax(sim_matrix-diag_col+1, 0)
+  margin_col = margin_col - utils.diag(utils.diag(margin_col)) -- set diagonal to 0
   ranking_loss = ranking_loss + torch.sum(margin_col)
 
   ranking_loss = ranking_loss / (N*N)
 
   -- Compute similarity matrix gradients
-  local dsim_matrix = torch.FloatTensor(N, N):fill(0)
-  margin_row_mask = torch.gt(margin_row, 0):float()
-  dsim_matrix = dsim_matrix + margin_row_mask
-  dsim_matrix = dsim_matrix - torch.diag(torch.sum(margin_row_mask, 2):view(-1))
+  self.gradInput:resizeAs(input):zero() -- reset to zeros
+  margin_row_mask = torch.gt(margin_row, 0):type(input:type())
+  self.gradInput = self.gradInput + margin_row_mask
+  self.gradInput = self.gradInput - utils.diag(torch.sum(margin_row_mask, 2):view(-1))
 
-  margin_col_mask = torch.gt(margin_col, 0):float()
-  dsim_matrix = dsim_matrix + margin_col_mask
-  dsim_matrix = dsim_matrix - torch.diag(torch.sum(margin_col_mask, 1):view(-1))
+  margin_col_mask = torch.gt(margin_col, 0):type(input:type())
+  self.gradInput = self.gradInput + margin_col_mask
+  self.gradInput = self.gradInput - utils.diag(torch.sum(margin_col_mask, 1):view(-1))
 
-  dsim_matrix:div(N*N)
-  if gpuid >= 0 then
-    dsim_matrix = dsim_matrix:cuda() -- convert back to CudaTensor
-  end
+  self.gradInput:div(N*N)
 
   self.output = ranking_loss
-  self.gradInput = dsim_matrix
   return self.output
 end
 

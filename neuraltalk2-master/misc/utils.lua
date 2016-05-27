@@ -29,6 +29,39 @@ function utils.write_json(path, j)
   file:close()
 end
 
+function utils.createTensor(type, size)
+    if type == 'torch.DoubleTensor' then
+        return torch.DoubleTensor(size)
+    elseif type == 'torch.FloatTensor' then
+        return torch.FloatTensor(size)
+    elseif type == 'torch.CudaTensor' then
+        return torch.CudaTensor(size)
+    else
+        return nil
+    end
+end
+
+function utils.diag(matrix)
+    N = matrix:size(1)
+
+    if matrix:size():size() == 2 then
+        sz = torch.LongStorage({N})
+        matrix_diag = utils.createTensor(matrix:type(), sz)
+        for i = 1, N do
+            matrix_diag[i] = matrix[i][i]
+        end
+    elseif matrix:size():size() == 1 then
+        sz = torch.LongStorage({N, N})
+        matrix_diag = utils.createTensor(matrix:type(), sz)
+        for i = 1, N do
+            matrix_diag[i][i] = matrix[i]
+        end
+    else
+        matrix_diag = nil
+    end
+    return matrix_diag
+end
+
 -- dicts is a list of tables of k:v pairs, create a single
 -- k:v table that has the mean of the v's for each k
 -- assumes that all dicts have same keys always

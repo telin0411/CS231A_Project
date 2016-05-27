@@ -214,7 +214,7 @@ local function eval_split(split, evalopt)
     local logprobs = protos.lm:forward{expanded_feats, data.labels}
     local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, protos.lm.tmax})
     local loss_softmax = protos.crit:forward(logprobs, data.labels)
-    local loss_ranking = protos.crit_ranker:forward({sim_matrix, opt.gpuid}, torch.Tensor())
+    local loss_ranking = protos.crit_ranker:forward(sim_matrix, torch.Tensor())
     local loss = loss_softmax + loss_ranking
 
     loss_sum = loss_sum + loss
@@ -285,7 +285,7 @@ local function lossFun()
   -- forward the language model criterion
   local loss_softmax = protos.crit:forward(logprobs, data.labels)
   -- forward the ranker model criterion
-  local loss_ranking = protos.crit_ranker:forward({sim_matrix, opt.gpuid}, torch.Tensor())
+  local loss_ranking = protos.crit_ranker:forward(sim_matrix, torch.Tensor())
   local loss = loss_softmax + loss_ranking
 
   -----------------------------------------------------------------------------

@@ -6,13 +6,14 @@ and that everything gradient checks.
 
 require 'torch'
 require 'misc.LanguageModel'
+require 'misc.Ranker'
 
 local gradcheck = require 'misc.gradcheck'
 
 local tests = {}
 local tester = torch.Tester()
 
--- validates the size and dimensions of a given 
+-- validates the size and dimensions of a given
 -- tensor a to be size given in table sz
 function tester:assertTensorSizeEq(a, sz)
   tester:asserteq(a:nDimension(), #sz)
@@ -29,48 +30,73 @@ local function forwardApiTestFactory(dtype)
   end
   local function f()
     -- create LanguageModel instance
-    local opt = {}
-    opt.vocab_size = 5
-    opt.input_encoding_size = 11
-    opt.rnn_size = 8
-    opt.num_layers = 2
-    opt.dropout = 0
-    opt.seq_length = 7
-    opt.batch_size = 10
-    local lm = nn.LanguageModel(opt)
-    local crit = nn.LanguageModelCriterion()
+    local lmOpt = {}
+    lmOpt.vocab_size = 5
+    lmOpt.input_encoding_size = 11
+    lmOpt.rnn_size = 8
+    lmOpt.num_layers = 2
+    lmOpt.dropout = 0
+    lmOpt.seq_length = 7
+    lmOpt.batch_size = 10
+    local rankerOpt = {}
+    rankerOpt.vocab_size = lmOpt.vocab_size
+    rankerOpt.input_encoding_size = lmOpt.input_encoding_size
+    rankerOpt.seq_length = lmOpt.seq_length
+    local lm = nn.LanguageModel(lmOpt)
+    local ranker = nn.Ranker(rankerOpt)
+    local lmCrit = nn.LanguageModelCriterion()
+    local rankerCrit = nn.RankerCriterion()
     lm:type(dtype)
-    crit:type(dtype)
+    ranker:type(dtype)
+    lmCrit:type(dtype)
+    rankerCrit:type(dtype)
 
     -- construct some input to feed in
-    local seq = torch.LongTensor(opt.seq_length, opt.batch_size):random(opt.vocab_size)
+    local seq = torch.LongTensor(lmOpt.seq_length, lmOpt.batch_size):random(lmOpt.vocab_size)
     -- make sure seq can be padded with zeroes and that things work ok
     seq[{ {4, 7}, 1 }] = 0
     seq[{ {5, 7}, 6 }] = 0
-    local imgs = torch.randn(opt.batch_size, opt.input_encoding_size):type(dtype)
-    local output = lm:forward{imgs, seq}
-    tester:assertlt(torch.max(output:view(-1)), 0) -- log probs should be <0
+    local imgs = torch.randn(lmOpt.batch_size, lmOpt.input_encoding_size):type(dtype)
+
+    -- forward
+    local logprobs = lm:forward{imgs, seq}
+    tester:assertlt(torch.max(logprobs:view(-1)), 0) -- log probs should be <0
+    local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, lm.tmax})
 
     -- the output should be of size (seq_length + 2, batch_size, vocab_size + 1)
     -- where the +1 is for the special END token appended at the end.
-    tester:assertTensorSizeEq(output, {opt.seq_length+2, opt.batch_size, opt.vocab_size+1})
+    tester:assertTensorSizeEq(logprobs, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
+    tester:assertTensorSizeEq(sim_matrix, {lmOpt.batch_size, lmOpt.batch_size})
+    tester:assertTensorSizeEq(sembed, {lmOpt.batch_size, lmOpt.input_encoding_size})
 
-    local loss = crit:forward(output, seq)
+    local loss_softmax = lmCrit:forward(logprobs, seq)
+    local loss_ranking = rankerCrit:forward(sim_matrix, torch.Tensor())
+    local loss = loss_softmax + loss_ranking
 
-    local gradOutput = crit:backward(output, seq)
-    tester:assertTensorSizeEq(gradOutput, {opt.seq_length+2, opt.batch_size, opt.vocab_size+1})
+    -- backward
+    local dsim_matrix = rankerCrit:backward(sim_matrix, torch.Tensor())
+    local dlogprobs_lm = lmCrit:backward(logprobs, seq)
+    local dlogprobs_ranker, dsembed, dexpanded_feats_ranker =
+        unpack(ranker:backward({logprobs, sembed, imgs}, dsim_matrix))
+
+    tester:assertTensorSizeEq(dlogprobs_lm, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
+    tester:assertTensorSizeEq(dlogprobs_ranker, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
+    tester:assertTensorSizeEq(dsembed, {lmOpt.batch_size, lmOpt.input_encoding_size})
+    tester:assertTensorSizeEq(dexpanded_feats_ranker, {lmOpt.batch_size, lmOpt.input_encoding_size})
+
+    local gradOutput = dlogprobs_lm + dlogprobs_ranker
 
     -- make sure the pattern of zero gradients is as expected
-    local gradAbs = torch.max(torch.abs(gradOutput), 3):view(opt.seq_length+2, opt.batch_size)
+    local gradAbs = torch.max(torch.abs(dlogprobs_lm), 3):view(lmOpt.seq_length+2, lmOpt.batch_size)
     local gradZeroMask = torch.eq(gradAbs,0)
-    local expectedGradZeroMask = torch.ByteTensor(opt.seq_length+2,opt.batch_size):zero()
+    local expectedGradZeroMask = torch.ByteTensor(lmOpt.seq_length+2,lmOpt.batch_size):zero()
     expectedGradZeroMask[{ {1}, {} }]:fill(1) -- first time step should be zero grad (img was passed in)
     expectedGradZeroMask[{ {6,9}, 1 }]:fill(1)
     expectedGradZeroMask[{ {7,9}, 6 }]:fill(1)
     tester:assertTensorEq(gradZeroMask:float(), expectedGradZeroMask:float(), 1e-8)
 
     local gradInput = lm:backward({imgs, seq}, gradOutput)
-    tester:assertTensorSizeEq(gradInput[1], {opt.batch_size, opt.input_encoding_size})
+    tester:assertTensorSizeEq(gradInput[1], {lmOpt.batch_size, lmOpt.input_encoding_size})
     tester:asserteq(gradInput[2]:nElement(), 0, 'grad on seq should be empty tensor')
 
   end
@@ -311,11 +337,11 @@ end
 tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
-tests.gradCheck = gradCheck
-tests.gradCheckLM = gradCheckLM
-tests.overfit = overfit
-tests.sample = sample
-tests.sample_beam = sample_beam
+-- tests.gradCheck = gradCheck
+-- tests.gradCheckLM = gradCheckLM
+-- tests.overfit = overfit
+-- tests.sample = sample
+-- tests.sample_beam = sample_beam
 
 tester:add(tests)
 tester:run()
