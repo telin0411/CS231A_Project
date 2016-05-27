@@ -166,7 +166,7 @@ local function gradCheckRankerLoss()
   opt.num_layers = 2
   opt.dropout = 0
   opt.seq_length = 7
-  opt.batch_size = 6
+  opt.batch_size = 80
 
   -- create Ranker instance
   local ranker = nn.Ranker(opt)
@@ -174,71 +174,18 @@ local function gradCheckRankerLoss()
   ranker:type(dtype)
   crit_ranker:type(dtype)
 
-  -- local sim_matrix = torch.randn(opt.batch_size, opt.batch_size):type(dtype)
-  local sim_matrix = torch.Tensor(opt.batch_size, opt.batch_size):type(dtype)
-  sim_matrix:random(1,10)
-  print("Sim matrix:")
-  print(sim_matrix)
+  local sim_matrix = torch.randn(opt.batch_size, opt.batch_size):type(dtype)
   local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
   local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
-  -- N = opt.batch_size
-  -- local ranking_loss = 0
-  -- diag = utils.diag(sim_matrix)
-  -- diag_row = torch.expand(torch.reshape(diag, N,1), N,N)
-  -- diag_col = torch.expand(torch.reshape(diag, 1,N), N,N)
-  -- print("diag row:")
-  -- print(diag_row)
-  -- print("diag col:")
-  -- print(diag_col)
-  --
-  -- -- Row loss
-  -- margin_row = torch.cmax(sim_matrix-diag_row+1, 0)
-  -- margin_row = margin_row - utils.diag(utils.diag(margin_row)) -- set diagonal to 0
-  -- ranking_loss = ranking_loss + torch.sum(margin_row)
-  -- print("Margin row:")
-  -- print(margin_row)
-  --
-  -- -- Col loss
-  -- margin_col = torch.cmax(sim_matrix-diag_col+1, 0)
-  -- margin_col = margin_col - utils.diag(utils.diag(margin_col)) -- set diagonal to 0
-  -- ranking_loss = ranking_loss + torch.sum(margin_col)
-  -- print("Margin col:")
-  -- print(margin_col)
-  --
-  -- -- ranking_loss = ranking_loss / N
-  -- print("ranking_loss")
-  -- print(ranking_loss)
-  --
-  -- -- Compute similarity matrix gradients
-  -- local dsim_matrix = torch.Tensor(sim_matrix:size()):zero():type(dtype)
-  -- margin_row_mask = torch.gt(margin_row, 0):type(dtype)
-  -- print("margin_row_mask:")
-  -- print(margin_row_mask)
-  -- dsim_matrix = dsim_matrix + margin_row_mask
-  -- print("dsim_matrix:")
-  -- print(dsim_matrix)
-  -- dsim_matrix = dsim_matrix - utils.diag(torch.sum(margin_row_mask, 2):view(-1))
-  -- print("dsim_matrix:")
-  -- print(dsim_matrix)
-  --
-  -- margin_col_mask = torch.gt(margin_col, 0):type(dtype)
-  -- print("margin_col_mask:")
-  -- print(margin_col_mask)
-  -- dsim_matrix = dsim_matrix + margin_col_mask
-  -- dsim_matrix = dsim_matrix - utils.diag(torch.sum(margin_col_mask, 1):view(-1))
-
-  -- dsim_matrix:div(N)
-  print("dsim_matrix:")
-  print(dsim_matrix)
-
-  -- create a loss function wrapper
+  
   local function f(x)
     local loss = crit_ranker:forward(x, torch.Tensor())
     return loss
   end
 
-  print(dsim_matrix)
+  dsim_matrix_cp = dsim_matrix:clone()
   local dsim_matrix_num = gradcheck.numeric_gradient(f, sim_matrix, 1, 1e-6)
+  dsim_matrix = dsim_matrix_cp
   print(dsim_matrix)
   print(dsim_matrix_num)
   tester:assertTensorEq(dsim_matrix, dsim_matrix_num, 1e-4)
