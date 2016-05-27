@@ -212,12 +212,12 @@ local function gradCheck()
   -- evaluate the analytic gradient
   local output = lm:forward{imgs, seq}
   local loss = crit:forward(output, seq)
-  local sim_matrix, sembed = unpack(ranker:forward{imgs, output, lm.tmax})
+  local sim_matrix, sembed = unpack(ranker:forward{imgs, output, seq})
   local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
   local gradOutput = crit:backward(output, seq)
   local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
-  local dlogprobs_ranker, dsembed, dimgs_ranker =
-    unpack(ranker:backward({output, sembed, imgs}, dsim_matrix))
+  local dlogprobs_ranker, dsembed, dimgs_ranker, dummy =
+    unpack(ranker:backward({output, sembed, imgs, seq}, dsim_matrix))
   gradOutput = torch.add(gradOutput, dlogprobs_ranker)
   local gradInput, dummy = unpack(lm:backward({imgs, seq}, gradOutput))
   gradInput = torch.add(gradInput, dimgs_ranker)
@@ -226,7 +226,7 @@ local function gradCheck()
   local function f(x)
     local output = lm:forward{x, seq}
     local loss = crit:forward(output, seq)
-    local sim_matrix, sembed = unpack(ranker:forward{x, output, lm.tmax})
+    local sim_matrix, sembed = unpack(ranker:forward{x, output, seq})
     local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
     loss = loss + ranking_loss
     return loss
@@ -408,13 +408,13 @@ local function sample_beam()
   tester:assert(torch.all(torch.gt(logsum2, logsum)))
 end
 
-tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
-tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
-tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
+-- tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
+-- tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
+-- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
 tests.gradCheckRankerLoss = gradCheckRankerLoss
 tests.gradCheck = gradCheck
 tests.gradCheckLM = gradCheckLM
-tests.overfit = overfit
+-- tests.overfit = overfit
 tests.sample = sample
 tests.sample_beam = sample_beam
 
