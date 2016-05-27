@@ -45,13 +45,21 @@ returns a tuple of:
 function layer:updateOutput(input)
   local imgs = input[1]
   local logprobs = input[2]
-  self.tmax = input[3]
+  local seq = input[3]
   local batch_size = imgs:size(1)
   local embed_size = imgs:size(2)
 
+  local L, N, M1 = logprobs:size(1),logprobs:size(2), logprobs:size(3)
+  local D = seq:size(1)
+  assert(D == L-2, 'input Tensor should be 2 larger in time')
+  local mask = utils.createTensor(logprobs:type(), logprobs:size())
+  mask[{{2,L-1}}] = torch.expand(torch.reshape(torch.gt(seq, 0):type(mask:type()), D, N, 1), D, N, M1)
+
   local probs = torch.exp(logprobs) -- (D+2)xNx(M+1)
+  local probs = torch.cmul(probs, mask)
   -- Use sum since we are only avg over tmax steps
-  local sum = torch.squeeze(torch.sum(probs, 1):div(self.tmax))
+  -- local sum = torch.squeeze(torch.sum(probs, 1):div(self.tmax))
+  local sum = torch.squeeze(torch.sum(probs, 1))-- Nx(M+1)
   local sembed = self.linear_module:forward(sum)
   local sim_matrix = imgs * sembed:t()
 
@@ -76,19 +84,29 @@ function layer:updateGradInput(input, gradOutput)
   local logprobs = input[1] -- (D+2)xNx(M+1)
   local sembed = input[2] -- NxK
   local imgs = input[3] -- NxK
+  local seq = input[4] -- DxN
+  local L, N, M1 = logprobs:size(1),logprobs:size(2), logprobs:size(3)
+  local D = seq:size(1)
+  assert(D == L-2, 'input Tensor should be 2 larger in time')
 
+  local mask = utils.createTensor(logprobs:type(), logprobs:size())
+  mask[{{2,L-1}}] = torch.expand(torch.reshape(torch.gt(seq, 0):type(mask:type()), D, N, 1), D, N, M1)
   local probs = torch.exp(logprobs) -- (D+2)xNx(M+1)
-  local sum = torch.squeeze(torch.sum(probs, 1):div(self.tmax)) -- Nx(M+1)
+  local probs_mask = torch.cmul(probs, mask)
+  -- local sum = torch.squeeze(torch.sum(probs, 1):div(self.tmax)) -- Nx(M+1)
+  local sum = torch.squeeze(torch.sum(probs_mask, 1))-- Nx(M+1)
 
   local dimgs = dsim_matrix * sembed
   local dsembed = dsim_matrix * imgs -- NxK
   local dsum = self.linear_module:backward(sum, dsembed) -- Nx(M+1)
-  local dprobs = utils.createTensor(gradOutput:type(), probs:size()) -- (D+2)xNx(M+1)
+  -- local dprobs = utils.createTensor(gradOutput:type(), probs:size()) -- (D+2)xNx(M+1)
   -- correct way to access weights?? 1,self.tmax or 2,self.tmax??
-  dprobs[{{1,self.tmax}}] = torch.repeatTensor(dsum, self.tmax, 1, 1):div(self.tmax)
+  -- dprobs[{{2,self.tmax}}] = torch.repeatTensor(dsum, self.tmax-1, 1, 1):div(self.tmax)
+  local dprobs = torch.repeatTensor(dsum, L, 1, 1)
+  dprobs = torch.cmul(dprobs, mask)
   local dlogprobs = torch.cmul(dprobs, probs) -- (D+2)xNx(M+1)
 
-  self.gradInput = {dlogprobs, dsembed, dimgs}
+  self.gradInput = {dlogprobs, dsembed, dimgs, torch.Tensor()}
   return self.gradInput
 end
 
