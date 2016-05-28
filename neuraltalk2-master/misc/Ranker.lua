@@ -37,6 +37,7 @@ input is a tuple of:
 1. imgs: torch.Tensor of size NxK (K is dim of image code)
 2. logprobs: torch.Tensor of size (D+2)xNx(M+1) (normalized log probabilities
 for the next token at every iteration of the LSTM)
+3. seq: DxN
 
 returns a tuple of:
 1. sim_matrix: a NxN Tensor
@@ -49,6 +50,11 @@ function layer:updateOutput(input)
   local batch_size = imgs:size(1)
   local embed_size = imgs:size(2)
 
+  -- print('seg')
+  -- print(seq)
+  -- print('logprobs')
+  -- print(logprobs)
+
   local L, N, M1 = logprobs:size(1),logprobs:size(2), logprobs:size(3)
   local D = seq:size(1)
   assert(D == L-2, 'input Tensor should be 2 larger in time')
@@ -56,7 +62,11 @@ function layer:updateOutput(input)
   mask[{{2,L-1}}] = torch.expand(torch.reshape(torch.gt(seq, 0):type(mask:type()), D, N, 1), D, N, M1)
 
   local probs = torch.exp(logprobs) -- (D+2)xNx(M+1)
+  -- print('probs')
+  -- print(probs)
   local probs = torch.cmul(probs, mask)
+  -- print('probs no zero')
+  -- print(probs)
   -- Use sum since we are only avg over tmax steps
   -- local sum = torch.squeeze(torch.sum(probs, 1):div(self.tmax))
   local sum = torch.squeeze(torch.sum(probs, 1))-- Nx(M+1)

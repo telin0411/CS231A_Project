@@ -61,7 +61,7 @@ local function forwardApiTestFactory(dtype)
     -- forward2
     local logprobs = lm:forward{imgs, seq}
     tester:assertlt(torch.max(logprobs:view(-1)), 0) -- log probs should be <0
-    local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, lm.tmax})
+    local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
 
     -- the output should be of size (seq_length + 2, batch_size, vocab_size + 1)
     -- where the +1 is for the special END token appended at the end.
@@ -76,8 +76,8 @@ local function forwardApiTestFactory(dtype)
     -- backward
     local dsim_matrix = rankerCrit:backward(sim_matrix, torch.Tensor())
     local dlogprobs_lm = lmCrit:backward(logprobs, seq)
-    local dlogprobs_ranker, dsembed, dexpanded_feats_ranker =
-        unpack(ranker:backward({logprobs, sembed, imgs}, dsim_matrix))
+    local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
+        unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
 
     tester:assertTensorSizeEq(dlogprobs_lm, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
     tester:assertTensorSizeEq(dlogprobs_ranker, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
@@ -213,24 +213,24 @@ local function gradCheckRanker()
   local imgs = torch.randn(lmOpt.batch_size, lmOpt.input_encoding_size):type(dtype)
 
   local logprobs = lm:forward{imgs, seq}
-  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, lm.tmax})
+  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
 
   dsim_matrix = torch.DoubleTensor(sim_matrix:size(1), sim_matrix:size(2)):fill(1)
-  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker =
-    unpack(ranker:backward({logprobs, sembed, imgs}, dsim_matrix))
+  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
+    unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
 
   local function f(x)
-    local sim_matrix, sembed = unpack(ranker:forward{imgs, x, lm.tmax})
+    local sim_matrix, sembed = unpack(ranker:forward{x, logprobs, seq})
     return sim_matrix
   end
 
-  local dlogprobs_ranker_num = gradcheck.numeric_gradient(f, logprobs, 1.0, 1e-6)
+  local dlogprobs_ranker_num = gradcheck.numeric_gradient(f, imgs, 1.0, 1e-6)
 
   -- print(dlogprobs_ranker)
   -- print(dlogprobs_ranker_num)
 
-  tester:assertTensorEq(dlogprobs_ranker, dlogprobs_ranker_num, 1e-4)
-  tester:assertlt(gradcheck.relative_error(dlogprobs_ranker, dlogprobs_ranker_num, 1e-8), 1e-4)
+  tester:assertTensorEq(dexpanded_feats_ranker, dlogprobs_ranker_num, 1e-4)
+  tester:assertlt(gradcheck.relative_error(dexpanded_feats_ranker, dlogprobs_ranker_num, 1e-8), 1e-4)
 end
 
 local function gradCheck()
@@ -262,12 +262,12 @@ local function gradCheck()
   -- evaluate the analytic gradient
   local output = lm:forward{imgs, seq}
   local loss = crit:forward(output, seq)
-  local sim_matrix, sembed = unpack(ranker:forward{imgs, output, lm.tmax})
+  local sim_matrix, sembed = unpack(ranker:forward{imgs, output, seq})
   local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
   local gradOutput = crit:backward(output, seq)
   local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
-  local dlogprobs_ranker, dsembed, dimgs_ranker =
-    unpack(ranker:backward({output, sembed, imgs}, dsim_matrix))
+  local dlogprobs_ranker, dsembed, dimgs_ranker, dummy =
+    unpack(ranker:backward({output, sembed, imgs, seq}, dsim_matrix))
   gradOutput = torch.add(gradOutput, dlogprobs_ranker)
   local gradInput, dummy = unpack(lm:backward({imgs, seq}, gradOutput))
   gradInput = torch.add(gradInput, dimgs_ranker)
@@ -276,7 +276,7 @@ local function gradCheck()
   local function f(x)
     local output = lm:forward{x, seq}
     local loss = crit:forward(output, seq)
-    local sim_matrix, sembed = unpack(ranker:forward{x, output, lm.tmax})
+    local sim_matrix, sembed = unpack(ranker:forward{x, output, seq})
     local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
     loss = loss + ranking_loss
     return loss
@@ -339,12 +339,12 @@ local function overfit()
     grad_params:zero()
     local output = lm:forward{imgs, seq}
     local loss = crit:forward(output, seq)
-    local sim_matrix, sembed = unpack(ranker:forward{imgs, output, lm.tmax})
+    local sim_matrix, sembed = unpack(ranker:forward{imgs, output, seq})
     local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
     local gradOutput = crit:backward(output, seq)
     local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
-    local dlogprobs_ranker, dsembed, dimgs_ranker =
-      unpack(ranker:backward({output, sembed, imgs}, dsim_matrix))
+    local dlogprobs_ranker, dsembed, dimgs_ranker, dummy =
+      unpack(ranker:backward({output, sembed, imgs, seq}, dsim_matrix))
     gradOutput = torch.add(gradOutput, dlogprobs_ranker)
     --print(string.format('loss1: %f, loss2: %f', loss, ranking_loss))
     lm:backward({imgs, seq}, gradOutput)
@@ -454,7 +454,7 @@ end
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
 -- tests.gradCheckRankerLoss = gradCheckRankerLoss
 tests.gradCheckRanker = gradCheckRanker
-tests.gradCheck = gradCheck
+-- tests.gradCheck = gradCheck
 -- tests.gradCheckLM = gradCheckLM
 -- tests.overfit = overfit
 -- tests.sample = sample
