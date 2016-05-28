@@ -97,9 +97,6 @@ function layer:updateGradInput(input, gradOutput)
   local dimgs = dsim_matrix * sembed
   local dsembed = dsim_matrix * imgs -- NxK
   local dsum = self.linear_module:backward(sum, dsembed) -- Nx(M+1)
-  -- local dprobs = utils.createTensor(gradOutput:type(), probs:size()) -- (D+2)xNx(M+1)
-  -- correct way to access weights?? 1,self.tmax or 2,self.tmax??
-  -- dprobs[{{2,self.tmax}}] = torch.repeatTensor(dsum, self.tmax-1, 1, 1):div(self.tmax)
   local dprobs_mask = torch.repeatTensor(dsum, L, 1, 1)
   local dprobs = torch.cmul(dprobs_mask, mask)
   local dlogprobs = torch.cmul(dprobs, probs) -- (D+2)xNx(M+1)
@@ -143,21 +140,31 @@ function crit:updateOutput(input, seq)
   ranking_loss = ranking_loss / N
 
   -- Compute similarity matrix gradients
-  self.gradInput:resizeAs(input):zero():type(input:type()) -- reset to zeros
+  self.dsim_matrix = torch.Tensor(input:size()):type(input:type()):zero()
+  -- self.gradInput:resizeAs(input):zero():type(input:type()) -- reset to zeros
+  -- margin_row_mask = torch.gt(margin_row, 0):type(input:type())
+  -- self.gradInput = self.gradInput + margin_row_mask
+  -- self.gradInput = self.gradInput - utils.diag(torch.sum(margin_row_mask, 2):view(-1))
+  -- self.gradInput:resizeAs(input):zero():type(input:type()) -- reset to zeros
   margin_row_mask = torch.gt(margin_row, 0):type(input:type())
-  self.gradInput = self.gradInput + margin_row_mask
-  self.gradInput = self.gradInput - utils.diag(torch.sum(margin_row_mask, 2):view(-1))
+  self.dsim_matrix = self.dsim_matrix + margin_row_mask
+  self.dsim_matrix = self.dsim_matrix - utils.diag(torch.sum(margin_row_mask, 2):view(-1))
 
   margin_col_mask = torch.gt(margin_col, 0):type(input:type())
-  self.gradInput = self.gradInput + margin_col_mask
-  self.gradInput = self.gradInput - utils.diag(torch.sum(margin_col_mask, 1):view(-1))
+  -- self.gradInput = self.gradInput + margin_col_mask
+  -- self.gradInput = self.gradInput - utils.diag(torch.sum(margin_col_mask, 1):view(-1))
+  self.dsim_matrix = self.dsim_matrix + margin_col_mask
+  self.dsim_matrix = self.dsim_matrix - utils.diag(torch.sum(margin_col_mask, 1):view(-1))
 
-  self.gradInput:div(N)
+  -- self.gradInput:div(N)
+  self.dsim_matrix:div(N)
 
   self.output = ranking_loss
   return self.output
 end
 
 function crit:updateGradInput(input, seq)
+  -- print("\nbackward: gradInput\n", self.gradInput)
+  self.gradInput = self.dsim_matrix:clone()
   return self.gradInput
 end
