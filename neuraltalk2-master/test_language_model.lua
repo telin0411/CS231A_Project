@@ -185,7 +185,9 @@ local function gradCheckRankerLoss()
   local dsim_matrix_num = gradcheck.numeric_gradient(f, sim_matrix, 1, 1e-6)
   dsim_matrix = dsim_matrix_cp
   tester:assertTensorEq(dsim_matrix, dsim_matrix_num, 1e-4)
-  tester:assertlt(gradcheck.relative_error(dsim_matrix, dsim_matrix_num, 1e-8), 1e-4)
+  local err_relative = gradcheck.relative_error(dsim_matrix, dsim_matrix_num, 1e-8)
+  tester:assertlt(err_relative, 1e-4)
+  print('\nrelative error: ', err_relative)
 end
 
 local function gradCheckRanker()
@@ -230,7 +232,9 @@ local function gradCheckRanker()
   -- print(dlogprobs_ranker_num)
 
   tester:assertTensorEq(dexpanded_feats_ranker, dlogprobs_ranker_num, 1e-4)
-  tester:assertlt(gradcheck.relative_error(dexpanded_feats_ranker, dlogprobs_ranker_num, 1e-8), 1e-4)
+  local err_relative = gradcheck.relative_error(dexpanded_feats_ranker, dlogprobs_ranker_num, 1e-8)
+  tester:assertlt(err_relative, 1e-4)
+  print('\nrelative error: ', err_relative)
 end
 
 local function gradCheck()
@@ -260,14 +264,15 @@ local function gradCheck()
   local imgs = torch.randn(opt.batch_size, opt.input_encoding_size):type(dtype)
 
   -- evaluate the analytic gradient
-  local output = lm:forward{imgs, seq}
-  local loss = crit:forward(output, seq)
-  local sim_matrix, sembed = unpack(ranker:forward{imgs, output, seq})
+  local logprobs = lm:forward{imgs, seq}
+  local loss = crit:forward(logprobs, seq)
+  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
   local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
-  local gradOutput = crit:backward(output, seq)
+
+  local gradOutput = crit:backward(logprobs, seq)
   local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
   local dlogprobs_ranker, dsembed, dimgs_ranker, dummy =
-    unpack(ranker:backward({output, sembed, imgs, seq}, dsim_matrix))
+    unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
   gradOutput = torch.add(gradOutput, dlogprobs_ranker)
   local gradInput, dummy = unpack(lm:backward({imgs, seq}, gradOutput))
   gradInput = torch.add(gradInput, dimgs_ranker)
@@ -296,7 +301,9 @@ local function gradCheck()
   -- end
 
   tester:assertTensorEq(gradInput, gradInput_num, 1e-4)
-  -- tester:assertlt(gradcheck.relative_error(gradInput, gradInput_num, 1e-8), 5e-4)
+  local err_relative = gradcheck.relative_error(gradInput, gradInput_num, 1e-8)
+  tester:assertlt(err_relative, 5e-4)
+  print('\nrelative error: ', err_relative)
 end
 
 local function overfit()
@@ -335,20 +342,26 @@ local function overfit()
   local expected_params = lstm_params + output_params + table_params + ranker_linear_params
   print('expected:', expected_params)
 
+  local reg_ranker = 0.1
+  local reg_softmax = 1
   local function lossFun()
     grad_params:zero()
     local output = lm:forward{imgs, seq}
-    local loss = crit:forward(output, seq)
+    local softmax_loss = crit:forward(output, seq)
+    softmax_loss = softmax_loss * reg_softmax
     local sim_matrix, sembed = unpack(ranker:forward{imgs, output, seq})
     local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
+    ranking_loss = ranking_loss * reg_ranker
     local gradOutput = crit:backward(output, seq)
+    gradOutput = gradOutput * reg_softmax
     local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
+    dsim_matrix = dsim_matrix * reg_ranker
     local dlogprobs_ranker, dsembed, dimgs_ranker, dummy =
       unpack(ranker:backward({output, sembed, imgs, seq}, dsim_matrix))
     gradOutput = torch.add(gradOutput, dlogprobs_ranker)
-    --print(string.format('loss1: %f, loss2: %f', loss, ranking_loss))
+    local loss = softmax_loss + ranking_loss
     lm:backward({imgs, seq}, gradOutput)
-    return loss
+    return {loss, softmax_loss, ranking_loss}
   end
 
   local loss
@@ -359,12 +372,12 @@ local function overfit()
   for t=1,nIter do
     loss = lossFun()
     -- test that initial loss makes sense
-    if t == 1 then tester:assertlt(math.abs(math.log(opt.vocab_size+1) - loss), 0.1) end
+    if t == 1 then tester:assertlt(math.abs(math.log(opt.vocab_size+1) - loss[1]), 0.1) end
     grad_cache:addcmul(1, grad_params, grad_params)
     ranker_grad_cache:addcmul(1, ranker_grad_params, ranker_grad_params)
     params:addcdiv(-1e-1, grad_params, torch.sqrt(grad_cache)) -- adagrad update
     ranker_params:addcdiv(-1e-2, ranker_grad_params, torch.sqrt(ranker_grad_cache)) -- adagrad update
-    print(string.format('iteration %d/%d: loss %f', t, nIter, loss))
+    print(string.format('iteration %d/%d: loss1 %f, loss2 %f, loss3 %f', t, nIter, loss[1], loss[2], loss[3]))
   end
   -- holy crap adagrad destroys the loss function!
 
@@ -452,10 +465,10 @@ end
 -- tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 -- tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
--- tests.gradCheckRankerLoss = gradCheckRankerLoss
+tests.gradCheckRankerLoss = gradCheckRankerLoss
 tests.gradCheckRanker = gradCheckRanker
--- tests.gradCheck = gradCheck
--- tests.gradCheckLM = gradCheckLM
+tests.gradCheck = gradCheck
+tests.gradCheckLM = gradCheckLM
 -- tests.overfit = overfit
 -- tests.sample = sample
 -- tests.sample_beam = sample_beam
