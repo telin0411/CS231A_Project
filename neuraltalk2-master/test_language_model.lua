@@ -51,6 +51,10 @@ local function forwardApiTestFactory(dtype)
     lmCrit:type(dtype)
     rankerCrit:type(dtype)
 
+    -- Ranker linear layer share weights with LM lookup table
+    ranker.linear_module.weight:set(lm.lookup_table.weight:t())
+    ranker.linear_module.gradWeight:set(lm.lookup_table.gradWeight:t())
+
     -- construct some input to feed in
     local seq = torch.LongTensor(lmOpt.seq_length, lmOpt.batch_size):random(lmOpt.vocab_size)
     -- make sure seq can be padded with zeroes and that things work ok
@@ -164,7 +168,7 @@ local function gradCheckRankerLoss()
   opt.num_layers = 2
   opt.dropout = 0
   opt.seq_length = 7
-  opt.batch_size = 20
+  opt.batch_size = 4
 
   -- create Ranker instance
   local ranker = nn.Ranker(opt)
@@ -181,11 +185,103 @@ local function gradCheckRankerLoss()
     return loss
   end
 
-  dsim_matrix_cp = dsim_matrix:clone()
   local dsim_matrix_num = gradcheck.numeric_gradient(f, sim_matrix, 1, 1e-6)
-  dsim_matrix = dsim_matrix_cp
   tester:assertTensorEq(dsim_matrix, dsim_matrix_num, 1e-4)
   local err_relative = gradcheck.relative_error(dsim_matrix, dsim_matrix_num, 1e-8)
+  tester:assertlt(err_relative, 1e-4)
+  print('\nrelative error: ', err_relative)
+end
+
+local function gradCheckLogProbsRanker()
+  local dtype = 'torch.DoubleTensor'
+  local lmOpt = {}
+  lmOpt.vocab_size = 5
+  lmOpt.input_encoding_size = 4
+  lmOpt.rnn_size = 8
+  lmOpt.num_layers = 2
+  lmOpt.dropout = 0
+  lmOpt.seq_length = 4
+  lmOpt.batch_size = 5
+  local rankerOpt = {}
+  rankerOpt.vocab_size = lmOpt.vocab_size
+  rankerOpt.input_encoding_size = lmOpt.input_encoding_size
+  rankerOpt.seq_length = lmOpt.seq_length
+  local lm = nn.LanguageModel(lmOpt)
+  local ranker = nn.Ranker(rankerOpt)
+  lm:type(dtype)
+  ranker:type(dtype)
+
+  local seq = torch.LongTensor(lmOpt.seq_length, lmOpt.batch_size):random(lmOpt.vocab_size):fill(1.0)
+  seq[{ {2, 4}, 1 }] = 0
+  seq[{ {3, 4}, 4 }] = 0
+  local imgs = torch.randn(lmOpt.batch_size, lmOpt.input_encoding_size):type(dtype):fill(1.0)
+
+  local logprobs = -torch.abs(torch.randn(lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1))
+  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
+  local w = torch.randn(sim_matrix:size(1), sim_matrix:size(2))
+  local loss = torch.sum(torch.cmul(sim_matrix, w))
+
+  local dsim_matrix = w
+  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
+    unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
+
+  local function f(x)
+    local sim_matrix, sembed = unpack(ranker:forward{imgs, x, seq})
+    local loss = torch.sum(torch.cmul(sim_matrix, w))
+    return loss
+  end
+
+  dlogprobs_ranker_num = gradcheck.numeric_gradient(f, logprobs, 1.0, 1e-6)
+
+  tester:assertTensorEq(dlogprobs_ranker, dlogprobs_ranker_num, 1e-4)
+  local err_relative = gradcheck.relative_error(dlogprobs_ranker, dlogprobs_ranker_num, 1e-8)
+  tester:assertlt(err_relative, 1e-4)
+  print('\nrelative error: ', err_relative)
+end
+
+local function gradCheckRankerImgs()
+  local dtype = 'torch.DoubleTensor'
+  local lmOpt = {}
+  lmOpt.vocab_size = 5
+  lmOpt.input_encoding_size = 4
+  lmOpt.rnn_size = 8
+  lmOpt.num_layers = 2
+  lmOpt.dropout = 0
+  lmOpt.seq_length = 7
+  lmOpt.batch_size = 6
+  local rankerOpt = {}
+  rankerOpt.vocab_size = lmOpt.vocab_size
+  rankerOpt.input_encoding_size = lmOpt.input_encoding_size
+  rankerOpt.seq_length = lmOpt.seq_length
+  local lm = nn.LanguageModel(lmOpt)
+  local ranker = nn.Ranker(rankerOpt)
+  lm:type(dtype)
+  ranker:type(dtype)
+
+  local seq = torch.LongTensor(lmOpt.seq_length, lmOpt.batch_size):random(lmOpt.vocab_size)
+  seq[{ {4, 7}, 1 }] = 0
+  seq[{ {5, 7}, 4 }] = 0
+  local imgs = torch.randn(lmOpt.batch_size, lmOpt.input_encoding_size):type(dtype)
+
+  local logprobs = -torch.abs(torch.randn(lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1))
+  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
+  local w = torch.randn(sim_matrix:size(1), sim_matrix:size(2))
+  local loss = torch.sum(torch.cmul(sim_matrix, w))
+
+  local dsim_matrix = w
+  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
+    unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
+
+  local function f(x)
+    local sim_matrix, sembed = unpack(ranker:forward{x, logprobs, seq})
+    local loss = torch.sum(torch.cmul(sim_matrix, w))
+    return loss
+  end
+
+  local dexpanded_feats_ranker_num = gradcheck.numeric_gradient(f, imgs, 1.0, 1e-6)
+
+  tester:assertTensorEq(dexpanded_feats_ranker, dexpanded_feats_ranker_num, 1e-4)
+  local err_relative = gradcheck.relative_error(dexpanded_feats_ranker, dexpanded_feats_ranker_num, 1e-8)
   tester:assertlt(err_relative, 1e-4)
   print('\nrelative error: ', err_relative)
 end
@@ -215,24 +311,37 @@ local function gradCheckRanker()
   local imgs = torch.randn(lmOpt.batch_size, lmOpt.input_encoding_size):type(dtype)
 
   local logprobs = lm:forward{imgs, seq}
-  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
+  local w1 = torch.randn(logprobs:size(1), logprobs:size(2), logprobs:size(3))
+  -- generate random weighted sum criterion
+  local loss_softmax = torch.sum(torch.cmul(logprobs, w1))
+  local dlogprobs_softmax = w1
 
-  dsim_matrix = torch.DoubleTensor(sim_matrix:size(1), sim_matrix:size(2)):fill(1)
+  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
+  local w2 = torch.randn(sim_matrix:size())
+  local loss_ranker = torch.sum(torch.cmul(sim_matrix, w2))
+  local dsim_matrix = w2
   local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
     unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
 
+  local loss = loss_softmax + loss_ranker
+  local dlogprobs = dlogprobs_softmax + dlogprobs_ranker
+
+  local dexpanded_feats_soft, dummy = unpack(lm:backward({imgs, seq}, dlogprobs))
+  local dexpanded_feats = dexpanded_feats_soft + dexpanded_feats_ranker
+
   local function f(x)
+    local logprobs = lm:forward{x, seq}
+    local loss_softmax = torch.sum(torch.cmul(logprobs, w1))
     local sim_matrix, sembed = unpack(ranker:forward{x, logprobs, seq})
-    return sim_matrix
+    local loss_ranker = torch.sum(torch.cmul(sim_matrix, w2))
+    local loss = loss_softmax + loss_ranker
+    return loss
   end
 
-  local dlogprobs_ranker_num = gradcheck.numeric_gradient(f, imgs, 1.0, 1e-6)
+  local dexpanded_feats_num = gradcheck.numeric_gradient(f, imgs, 1.0, 1e-6)
 
-  -- print(dlogprobs_ranker)
-  -- print(dlogprobs_ranker_num)
-
-  tester:assertTensorEq(dexpanded_feats_ranker, dlogprobs_ranker_num, 1e-4)
-  local err_relative = gradcheck.relative_error(dexpanded_feats_ranker, dlogprobs_ranker_num, 1e-8)
+  tester:assertTensorEq(dexpanded_feats, dexpanded_feats_num, 1e-4)
+  local err_relative = gradcheck.relative_error(dexpanded_feats, dexpanded_feats_num, 1e-8)
   tester:assertlt(err_relative, 1e-4)
   print('\nrelative error: ', err_relative)
 end
@@ -257,6 +366,10 @@ local function gradCheck()
   local crit_ranker = nn.RankerCriterion()
   ranker:type(dtype)
   crit_ranker:type(dtype)
+
+  -- Ranker linear layer share weights with LM lookup table
+  ranker.linear_module.weight:set(lm.lookup_table.weight:t())
+  ranker.linear_module.gradWeight:set(lm.lookup_table.gradWeight:t())
 
   local seq = torch.LongTensor(opt.seq_length, opt.batch_size):random(opt.vocab_size)
   seq[{ {4, 7}, 1 }] = 0
@@ -287,9 +400,7 @@ local function gradCheck()
     return loss
   end
 
-  local gradInput_cp = gradInput:clone()
   local gradInput_num = gradcheck.numeric_gradient(f, imgs, 1, 1e-6)
-  gradInput = gradInput_cp
 
   -- print(gradInput)
   -- print(gradInput_num)
@@ -327,6 +438,10 @@ local function overfit()
   ranker:type(dtype)
   crit_ranker:type(dtype)
 
+  -- Ranker linear layer share weights with LM lookup table
+  ranker.linear_module.weight:set(lm.lookup_table.weight:t())
+  ranker.linear_module.gradWeight:set(lm.lookup_table.gradWeight:t())
+
   local seq = torch.LongTensor(opt.seq_length, opt.batch_size):random(opt.vocab_size)
   seq[{ {4, 7}, 1 }] = 0
   seq[{ {5, 7}, 4 }] = 0
@@ -342,7 +457,7 @@ local function overfit()
   local expected_params = lstm_params + output_params + table_params + ranker_linear_params
   print('expected:', expected_params)
 
-  local reg_ranker = 0.1
+  local reg_ranker = 5e-2
   local reg_softmax = 1
   local function lossFun()
     grad_params:zero()
@@ -369,7 +484,11 @@ local function overfit()
   local grad_cache = grad_params:clone():fill(1e-8)
   local ranker_grad_cache = ranker_grad_params:clone():fill(1e-8)
   print('trying to overfit the language model on toy data:')
-  for t=1,nIter do
+  loss = lossFun()
+  t = 0
+  while loss[1] > 1e-2 do
+  -- for t=1,nIter do
+    t = t + 1
     loss = lossFun()
     -- test that initial loss makes sense
     if t == 1 then tester:assertlt(math.abs(math.log(opt.vocab_size+1) - loss[1]), 0.1) end
@@ -381,7 +500,7 @@ local function overfit()
   end
   -- holy crap adagrad destroys the loss function!
 
-  tester:assertlt(loss, 0.2)
+  tester:assertlt(loss[1], 0.2)
 end
 
 -- check that we can call :sample() and that correct-looking things happen
@@ -464,14 +583,16 @@ end
 
 -- tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 -- tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
--- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
-tests.gradCheckRankerLoss = gradCheckRankerLoss
-tests.gradCheckRanker = gradCheckRanker
-tests.gradCheck = gradCheck
-tests.gradCheckLM = gradCheckLM
--- tests.overfit = overfit
+-- -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
+-- tests.gradCheckRankerLoss = gradCheckRankerLoss
+-- tests.gradCheckRanker = gradCheckRanker
+-- tests.gradCheckRankerImgs = gradCheckRankerImgs
+-- tests.gradCheckLogProbsRanker = gradCheckLogProbsRanker
+-- tests.gradCheck = gradCheck
+-- tests.gradCheckLM = gradCheckLM
 -- tests.sample = sample
 -- tests.sample_beam = sample_beam
+tests.overfit = overfit
 
 tester:add(tests)
 tester:run()
