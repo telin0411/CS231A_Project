@@ -59,7 +59,7 @@ function LSTM.lstm(input_size, output_size, rnn_size, n, dropout)
   local proj = nn.Linear(rnn_size, output_size)(top_h):annotate{name='decoder'}
   local logsoft = nn.LogSoftMax()(proj)
   table.insert(outputs, logsoft)
-
+  print (#inputs)
   return nn.gModule(inputs, outputs)
 end
 

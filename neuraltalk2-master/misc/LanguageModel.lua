@@ -1,4 +1,5 @@
 require 'nn'
+require 'rnn'
 local utils = require 'misc.utils'
 local net_utils = require 'misc.net_utils'
 local LSTM = require 'misc.LSTM'
@@ -20,7 +21,17 @@ function layer:__init(opt)
   -- options for Language Model
   self.seq_length = utils.getopt(opt, 'seq_length')
   -- create the core lstm network. note +1 for both the START and END tokens
-  self.core = LSTM.lstm(self.input_encoding_size, self.vocab_size + 1, self.rnn_size, self.num_layers, dropout)
+  -- self.core = LSTM.lstm(self.input_encoding_size, self.vocab_size + 1, self.rnn_size, self.num_layers, dropout)
+  
+  -- Added Bi-directional LSTM
+  local fwd = LSTM.lstm(self.input_encoding_size, self.vocab_size + 1, self.rnn_size, self.num_layers, dropout)
+  -- local bwd = fwd:clone()
+  -- bwd:reset()
+  -- local merge = nn.JoinTable(1, 1)
+  -- local merge = nn.CAddTable()
+  -- local brnn = nn.BiSequencerLM(fwd, bwd, merge)
+  self.core = fwd
+  
   self.lookup_table = nn.LookupTable(self.vocab_size + 1, self.input_encoding_size)
   self:_createInitState(1) -- will be lazily resized later during forward passes
 end
@@ -342,7 +353,18 @@ function layer:updateOutput(input)
       -- construct the inputs
       self.inputs[t] = {xt,unpack(self.state[t-1])}
       -- forward the network
+      -- Changes starts
+      -- local out1 = self.clones[t]._fwd:forward(self.inputs[t])
+      -- local out2 = self.clones[t]._bwd:add(nn.ReverseTable()):forward(self.inputs[t])
+      -- local out_aux = {}
+      -- print (out1)
+      -- print (out2)
+      -- for outidx = 1, #self.inputs[t] do
+      --   out_aux[outidx] = torch.add(out1[outidx], out2[outidx])
+      -- end
       local out = self.clones[t]:forward(self.inputs[t])
+      -- local out = out_aux
+      -- Changes ends
       -- process the outputs
       self.output[t] = out[self.num_state+1] -- last element is the output vector
       self.state[t] = {} -- the rest is state
@@ -359,7 +381,6 @@ gradOutput is an (D+2)xNx(M+1) Tensor.
 --]]
 function layer:updateGradInput(input, gradOutput)
   local dimgs -- grad on input images
-
   -- go backwards and lets compute gradients
   local dstate = {[self.tmax] = self.init_state} -- this works when init_state is all zeros
   for t=self.tmax,1,-1 do
@@ -367,7 +388,16 @@ function layer:updateGradInput(input, gradOutput)
     local dout = {}
     for k=1,#dstate[t] do table.insert(dout, dstate[t][k]) end
     table.insert(dout, gradOutput[t])
+    -- Change Starts
+    -- local dinputs1 = self.clones[t]._fwd:backward(self.inputs[t], dout)
+    -- local dinputs2 = self.clones[t]._bwd:backward(self.inputs[t], dout):add(nn.ReverseTable())
+    -- local dinputs_aux = {}
+    -- for idx = 1, #self.inputs[t] do
+    --   dinputs_aux[idx] = torch.add(dinputs1[idx], dinputs2[idx])
+    -- end
+    -- local dinputs = dinputs_aux
     local dinputs = self.clones[t]:backward(self.inputs[t], dout)
+    -- Change ends
     -- split the gradient to xt and to state
     local dxt = dinputs[1] -- first element is the input vector
     dstate[t-1] = {} -- copy over rest to state grad
