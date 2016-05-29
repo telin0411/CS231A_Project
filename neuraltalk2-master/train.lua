@@ -34,7 +34,7 @@ cmd:option('-input_encoding_size',512,'the encoding size of each token in the vo
 
 -- Optimization: General
 cmd:option('-reg_softmax', 1, 'Weight for softmax loss')
-cmd:option('-reg_ranker', 1e-1, 'Weight for ranking loss')
+cmd:option('-reg_ranker', 5e-2, 'Weight for ranking loss')
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
 cmd:option('-batch_size',16,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
@@ -328,7 +328,7 @@ local function lossFun()
   -----------------------------------------------------------------------------
 
   -- and lets get out!
-  local losses = { total_loss = loss, softmax_loss = loss_softmax, ranking_loss = loss_ranking }
+  local losses = { total_loss = loss, softmax_loss = loss_softmax, ranking_loss = loss_ranking, sim_matrix = sim_matrix }
   return losses
 end
 
@@ -363,6 +363,12 @@ while true do
     end
 
     local checkpoint_path = path.join(opt.checkpoint_path, 'model_id' .. opt.id)
+
+    -- save similarity matrix
+    local data = {}
+    data.sim_matrix = losses.sim_matrix
+    utils.write_json(checkpoint_path .. '_data.json', data)
+    print('save model data to ' .. checkpoint_path .. '_data.json')
 
     -- write a (thin) json report
     local checkpoint = {}
