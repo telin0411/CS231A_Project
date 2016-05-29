@@ -1,5 +1,6 @@
 require 'nn'
 require 'rnn'
+local utils = require 'misc.utils'
 
 local layer, parent = torch.class('nn.BLSTM', 'nn.Module')
 
@@ -33,10 +34,23 @@ function layer:parameters()
 end
 
 function layer:updateOutput(input)
-  self.outputs = self.core:forward(input)
+  inputs = {}
+  for i = 1, input:size(1) do
+    inputs[i] = input[i]
+  end 
+  self.outputs = self.core:forward(inputs)
   return self.outputs
+end
 
-function layer:updateGradInput(inputs, gradOutputs)
+function layer:updateGradInput(input, gradOutput)
+  gradOutputs = {}
+  inputs      = {}
+  for i = 1, gradOutput:size(1) do
+    gradOutputs[i] = gradOutput[i]
+  end
+  for i = 1, input:size(1) do
+    inputs[i] = input[i]
+  end
   self.gradInput = self.core:backward(inputs, gradOutputs)
   return self.gradInput
-  
+end  

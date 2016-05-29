@@ -9,6 +9,7 @@ require 'misc.DataLoader'
 require 'misc.LanguageModel'
 local net_utils = require 'misc.net_utils'
 require 'misc.optim_updates'
+require 'misc.BLSTM'
 
 -------------------------------------------------------------------------------
 -- Input arguments and options
@@ -106,6 +107,12 @@ if string.len(opt.start_from) > 0 then
 else
   -- create protos from scratch
   -- intialize language model
+  --
+  local blstmOpt = {}
+  blstmOpt.vocab_size = loader:getVocabSize()
+  blstmOpt.input_encoding_size = opt.input_encoding_size
+  protos.blstm = nn.BLSTM(blstmOpt)
+  --
   local lmOpt = {}
   lmOpt.vocab_size = loader:getVocabSize()
   lmOpt.input_encoding_size = opt.input_encoding_size
@@ -250,6 +257,12 @@ local function lossFun()
   local expanded_feats = protos.expander:forward(feats)
   -- forward the language model
   local logprobs = protos.lm:forward{expanded_feats, data.labels}
+
+  -- Test BLSTM
+  local blstmLogProbs = protos.blstm:forward(logprobs)
+  print (blstmLogProbs[1]:size())
+  --
+
   -- print (logprobs:dim())
   -- forward the language model criterion
   local loss = protos.crit:forward(logprobs, data.labels)
@@ -258,6 +271,13 @@ local function lossFun()
   -- Backward pass
   -----------------------------------------------------------------------------
   -- backprop criterion
+  
+  -- Test BLSTM
+  testBLSTMgrads = torch.Tensor(loader:getSeqLength()+2, opt.batch_size * opt.seq_per_img, opt.input_encoding_size)
+  local dblstmLogProbs = protos.blstm:backward(logprobs, testBLSTMgrads)
+  print (dblstmLogProbs)
+  -- 
+
   local dlogprobs = protos.crit:backward(logprobs, data.labels)
   -- backprop language model
   local dexpanded_feats, ddummy = unpack(protos.lm:backward({expanded_feats, data.labels}, dlogprobs))
