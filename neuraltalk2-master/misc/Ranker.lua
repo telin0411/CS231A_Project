@@ -66,37 +66,6 @@ function layer:updateOutput(input)
   return self.output
 end
 
--- function layer:updateOutput(input)
---   local imgs = input[1]
---   local logprobs = input[2]
---   local seq = input[3]
---   local batch_size = imgs:size(1)
---   local embed_size = imgs:size(2)
---
---   local L, N, M1 = logprobs:size(1),logprobs:size(2), logprobs:size(3)
---   local D = seq:size(1)
---   assert(D == L-2, 'input Tensor should be 2 larger in time')
---   local mask = utils.createTensor(logprobs:type(), logprobs:size())
---   mask[{{2,L-1}}] = torch.expand(torch.reshape(torch.gt(seq, 0):type(mask:type()), D, N, 1), D, N, M1)
---
---   local probs = torch.exp(logprobs) -- (D+2)xNx(M+1)
---   local probs = torch.cmul(probs, mask)
---   local sum = torch.squeeze(torch.sum(probs, 1))-- Nx(M+1)
---   M = sum:size(2)-1
---   K = imgs:size(2)
---   w = torch.DoubleTensor(M+1, K):fill(0.5)
---   w[{{},1}] = 0.8
---   -- self.linear_module:forward(sum)
---   -- print('Linear module weights: ', self.linear_module.weight)
---   -- print('Linear module bias: ', self.linear_module.bias)
---   -- local sembed = sum * self.linear_module.weight:t() --self.linear_module:forward(sum) -- NxK
---   local sembed = sum * w
---   local sim_matrix = imgs * sembed:t()
---
---   self.output = {sim_matrix, sembed}
---   return self.output
--- end
-
 --[[
 input is a tuple of:
 1. logprobs: torch.Tensor of size (D+2)xNx(M+1) (normalized log probabilities
@@ -135,40 +104,6 @@ function layer:updateGradInput(input, gradOutput)
   self.gradInput = {dlogprobs, dsembed, dimgs, torch.Tensor()}
   return self.gradInput
 end
-
--- function layer:updateGradInput(input, gradOutput)
---   local dsim_matrix = gradOutput -- NxN
---   local logprobs = input[1] -- (D+2)xNx(M+1)
---   local sembed = input[2] -- NxK
---   local imgs = input[3] -- NxK
---   local seq = input[4] -- DxN
---   local L, N, M1 = logprobs:size(1),logprobs:size(2), logprobs:size(3)
---   local D = seq:size(1)
---   assert(D == L-2, 'input Tensor should be 2 larger in time')
---
---   local mask = utils.createTensor(logprobs:type(), logprobs:size())
---   mask[{{2,L-1}}] = torch.expand(torch.reshape(torch.gt(seq, 0):type(mask:type()), D, N, 1), D, N, M1)
---   local probs = torch.exp(logprobs) -- (D+2)xNx(M+1)
---   local probs_mask = torch.cmul(probs, mask)
---   local sum = torch.squeeze(torch.sum(probs_mask, 1))-- Nx(M+1)
---
---   local dimgs = dsim_matrix * sembed
---   local dsembed = dsim_matrix * imgs -- NxK
---   M = sum:size(2)-1
---   K = imgs:size(2)
---   w = torch.DoubleTensor(M+1, K):fill(0.5)
---   w[{{},1}] = 0.8
---   -- self.linear_module:backward(sum, dsembed)
---   -- print('Backward Linear module weights: ', self.linear_module.weight)
---   -- print('Backward Linear module bias: ', self.linear_module.bias)
---   -- local dsum = dsembed * self.linear_module.weight --self.linear_module:backward(sum, dsembed) -- Nx(M+1)
---   local dsum = dsembed * w:t()
---   local dprobs = torch.repeatTensor(dsum, L, 1, 1)
---   dprobs = torch.cmul(dprobs, mask)
---   local dlogprobs = torch.cmul(dprobs, probs) -- (D+2)xNx(M+1)
---   self.gradInput = {dlogprobs, dsembed, dimgs, torch.Tensor()}
---   return self.gradInput
--- end
 
 -------------------------------------------------------------------------------
 -- Ranker Criterion
