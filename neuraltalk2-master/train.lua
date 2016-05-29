@@ -34,7 +34,7 @@ cmd:option('-input_encoding_size',512,'the encoding size of each token in the vo
 
 -- Optimization: General
 cmd:option('-reg_softmax', 1, 'Weight for softmax loss')
-cmd:option('-reg_ranker', 5e-2, 'Weight for ranking loss')
+cmd:option('-reg_ranker', 1e-1, 'Weight for ranking loss')
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
 cmd:option('-batch_size',16,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
@@ -50,6 +50,7 @@ cmd:option('-optim_alpha',0.8,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 -- Optimization: for the Ranker Model
+cmd:option('-ranker_optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
 cmd:option('-ranker_learning_rate',1e-5,'learning rate for the Ranker')
 -- Optimization: for the CNN
 cmd:option('-cnn_optim','adam','optimization to use for CNN')
@@ -416,21 +417,31 @@ while true do
   -- perform a parameter update
   if opt.optim == 'rmsprop' then
     rmsprop(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state)
-    rmsprop(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, opt.optim_epsilon, ranker_optim_state)
   elseif opt.optim == 'adagrad' then
     adagrad(params, grad_params, learning_rate, opt.optim_epsilon, optim_state)
-    adagrad(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_epsilon, ranker_optim_state)
   elseif opt.optim == 'sgd' then
     sgd(params, grad_params, opt.learning_rate)
-    sgd(ranker_params, ranker_grad_params, ranker_learning_rate)
   elseif opt.optim == 'sgdm' then
     sgdm(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
-    sgdm(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, ranker_optim_state)
   elseif opt.optim == 'sgdmom' then
     sgdmom(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
-    sgdmom(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, ranker_optim_state)
   elseif opt.optim == 'adam' then
     adam(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, optim_state)
+  else
+    error('bad option opt.optim')
+  end
+
+  if opt.ranker_optim == 'rmsprop' then
+    rmsprop(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, opt.optim_epsilon, ranker_optim_state)
+  elseif opt.ranker_optim == 'adagrad' then
+    adagrad(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_epsilon, ranker_optim_state)
+  elseif opt.ranker_optim == 'sgd' then
+    sgd(ranker_params, ranker_grad_params, ranker_learning_rate)
+  elseif opt.ranker_optim == 'sgdm' then
+    sgdm(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, ranker_optim_state)
+  elseif opt.ranker_optim == 'sgdmom' then
+    sgdmom(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, ranker_optim_state)
+  elseif opt.ranker_optim == 'adam' then
     adam(ranker_params, ranker_grad_params, ranker_learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, ranker_optim_state)
   else
     error('bad option opt.optim')
