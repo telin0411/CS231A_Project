@@ -29,6 +29,22 @@ function utils.write_json(path, j)
   file:close()
 end
 
+function utils.write_tensor(path, tensor)
+    local out = assert(io.open(path, 'w')) -- open a file for serialization
+
+    splitter = ','
+    for i = 1, tensor:size(1) do
+        for j = 1, tensor:size(2) do
+            out:write(tensor[i][j])
+            if j == tensor:size(2) then
+                out:write('\n')
+            else
+                out:write(splitter)
+            end
+        end
+    end
+end
+
 function utils.createTensor(type, size)
     if type == 'torch.DoubleTensor' then
         return torch.DoubleTensor(size):zero()

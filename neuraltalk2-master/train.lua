@@ -365,10 +365,8 @@ while true do
     local checkpoint_path = path.join(opt.checkpoint_path, 'model_id' .. opt.id)
 
     -- save similarity matrix
-    local data = {}
-    data.sim_matrix = losses.sim_matrix
-    utils.write_json(checkpoint_path .. '_data.json', data)
-    print('save model data to ' .. checkpoint_path .. '_data.json')
+    utils.write_tensor(checkpoint_path .. '_data.csv', losses.sim_matrix:double())
+    print('save model data to ' .. checkpoint_path .. '_data.csv')
 
     -- write a (thin) json report
     local checkpoint = {}

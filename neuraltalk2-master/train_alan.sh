@@ -1,0 +1,1 @@
+th train.lua -input_h5 coco/cocotalk.h5 -input_json coco/cocotalk.json -checkpoint_path /mnt0/data/img-cap/models/ -cnn_proto /mnt0/data/img-cap/vgg_model/VGG_ILSVRC_16_layers_deploy.prototxt -cnn_model /mnt0/data/img-cap/vgg_model/VGG_ILSVRC_16_layers.caffemodel -language_eval 1 -max_iters 2500 -id 3
