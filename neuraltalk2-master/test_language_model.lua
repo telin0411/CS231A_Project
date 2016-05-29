@@ -38,14 +38,16 @@ local function forwardApiTestFactory(dtype)
     lmOpt.dropout = 0
     lmOpt.seq_length = 7
     lmOpt.batch_size = 10
+    lmOpt.reg_softmax = 1
     local rankerOpt = {}
     rankerOpt.vocab_size = lmOpt.vocab_size
     rankerOpt.input_encoding_size = lmOpt.input_encoding_size
     rankerOpt.seq_length = lmOpt.seq_length
+    rankerOpt.reg_ranker = 5e-2
     local lm = nn.LanguageModel(lmOpt)
     local ranker = nn.Ranker(rankerOpt)
-    local lmCrit = nn.LanguageModelCriterion()
-    local rankerCrit = nn.RankerCriterion()
+    local lmCrit = nn.LanguageModelCriterion(lmOpt)
+    local rankerCrit = nn.RankerCriterion(rankerOpt)
     lm:type(dtype)
     ranker:type(dtype)
     lmCrit:type(dtype)
@@ -119,8 +121,9 @@ local function gradCheckLM()
   opt.dropout = 0
   opt.seq_length = 7
   opt.batch_size = 6
+  opt.reg_softmax = 1
   local lm = nn.LanguageModel(opt)
-  local crit = nn.LanguageModelCriterion()
+  local crit = nn.LanguageModelCriterion(opt)
   lm:type(dtype)
   crit:type(dtype)
 
@@ -169,10 +172,11 @@ local function gradCheckRankerLoss()
   opt.dropout = 0
   opt.seq_length = 7
   opt.batch_size = 4
+  opt.reg_ranker = 5e-2
 
   -- create Ranker instance
   local ranker = nn.Ranker(opt)
-  local crit_ranker = nn.RankerCriterion()
+  local crit_ranker = nn.RankerCriterion(opt)
   ranker:type(dtype)
   crit_ranker:type(dtype)
 
@@ -202,7 +206,9 @@ local function gradCheckLogProbsRanker()
   lmOpt.dropout = 0
   lmOpt.seq_length = 4
   lmOpt.batch_size = 5
+  lmOpt.reg_softmax = 1
   local rankerOpt = {}
+  rankerOpt.reg_ranker = 5e-2
   rankerOpt.vocab_size = lmOpt.vocab_size
   rankerOpt.input_encoding_size = lmOpt.input_encoding_size
   rankerOpt.seq_length = lmOpt.seq_length
@@ -249,7 +255,9 @@ local function gradCheckRankerImgs()
   lmOpt.dropout = 0
   lmOpt.seq_length = 7
   lmOpt.batch_size = 6
+  lmOpt.reg_softmax = 1
   local rankerOpt = {}
+  rankerOpt.reg_ranker = 5e-2
   rankerOpt.vocab_size = lmOpt.vocab_size
   rankerOpt.input_encoding_size = lmOpt.input_encoding_size
   rankerOpt.seq_length = lmOpt.seq_length
@@ -296,7 +304,9 @@ local function gradCheckRanker()
   lmOpt.dropout = 0
   lmOpt.seq_length = 7
   lmOpt.batch_size = 6
+  lmOpt.reg_softmax = 1
   local rankerOpt = {}
+  rankerOpt.reg_ranker = 5e-2
   rankerOpt.vocab_size = lmOpt.vocab_size
   rankerOpt.input_encoding_size = lmOpt.input_encoding_size
   rankerOpt.seq_length = lmOpt.seq_length
@@ -356,14 +366,16 @@ local function gradCheck()
   opt.dropout = 0
   opt.seq_length = 7
   opt.batch_size = 6
+  opt.reg_softmax = 1
+  opt.reg_ranker = 5e-2
   local lm = nn.LanguageModel(opt)
-  local crit = nn.LanguageModelCriterion()
+  local crit = nn.LanguageModelCriterion(opt)
   lm:type(dtype)
   crit:type(dtype)
 
   -- create Ranker instance
   local ranker = nn.Ranker(opt)
-  local crit_ranker = nn.RankerCriterion()
+  local crit_ranker = nn.RankerCriterion(opt)
   ranker:type(dtype)
   crit_ranker:type(dtype)
 
@@ -427,14 +439,16 @@ local function overfit()
   opt.dropout = 0
   opt.seq_length = 7
   opt.batch_size = 6
+  opt.reg_softmax = 1
+  opt.reg_ranker = 5e-2
   local lm = nn.LanguageModel(opt)
-  local crit = nn.LanguageModelCriterion()
+  local crit = nn.LanguageModelCriterion(opt)
   lm:type(dtype)
   crit:type(dtype)
 
   -- create Ranker instance
   local ranker = nn.Ranker(opt)
-  local crit_ranker = nn.RankerCriterion()
+  local crit_ranker = nn.RankerCriterion(opt)
   ranker:type(dtype)
   crit_ranker:type(dtype)
 
@@ -457,20 +471,14 @@ local function overfit()
   local expected_params = lstm_params + output_params + table_params + ranker_linear_params
   print('expected:', expected_params)
 
-  local reg_ranker = 5e-2
-  local reg_softmax = 1
   local function lossFun()
     grad_params:zero()
     local output = lm:forward{imgs, seq}
     local softmax_loss = crit:forward(output, seq)
-    softmax_loss = softmax_loss * reg_softmax
     local sim_matrix, sembed = unpack(ranker:forward{imgs, output, seq})
     local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
-    ranking_loss = ranking_loss * reg_ranker
     local gradOutput = crit:backward(output, seq)
-    gradOutput = gradOutput * reg_softmax
     local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
-    dsim_matrix = dsim_matrix * reg_ranker
     local dlogprobs_ranker, dsembed, dimgs_ranker, dummy =
       unpack(ranker:backward({output, sembed, imgs, seq}, dsim_matrix))
     gradOutput = torch.add(gradOutput, dlogprobs_ranker)
@@ -495,7 +503,7 @@ local function overfit()
     grad_cache:addcmul(1, grad_params, grad_params)
     ranker_grad_cache:addcmul(1, ranker_grad_params, ranker_grad_params)
     params:addcdiv(-1e-1, grad_params, torch.sqrt(grad_cache)) -- adagrad update
-    ranker_params:addcdiv(-1e-2, ranker_grad_params, torch.sqrt(ranker_grad_cache)) -- adagrad update
+    ranker_params:addcdiv(-1e-1, ranker_grad_params, torch.sqrt(ranker_grad_cache)) -- adagrad update
     print(string.format('iteration %d/%d: loss1 %f, loss2 %f, loss3 %f', t, nIter, loss[1], loss[2], loss[3]))
   end
   -- holy crap adagrad destroys the loss function!
@@ -514,6 +522,7 @@ local function sample()
   opt.dropout = 0
   opt.seq_length = 7
   opt.batch_size = 6
+  opt.reg_softmax = 1
   local lm = nn.LanguageModel(opt)
 
   local imgs = torch.randn(opt.batch_size, opt.input_encoding_size):type(dtype)
@@ -542,6 +551,7 @@ local function sample_beam()
   opt.dropout = 0
   opt.seq_length = 7
   opt.batch_size = 6
+  opt.reg_softmax = 1
   local lm = nn.LanguageModel(opt)
 
   local imgs = torch.randn(opt.batch_size, opt.input_encoding_size):type(dtype)
@@ -583,7 +593,7 @@ end
 
 -- tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 -- tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
--- -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
+-- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
 -- tests.gradCheckRankerLoss = gradCheckRankerLoss
 -- tests.gradCheckRanker = gradCheckRanker
 -- tests.gradCheckRankerImgs = gradCheckRankerImgs

@@ -12,6 +12,7 @@ function layer:__init(opt)
   parent.__init(self)
 
   -- options for core network
+  self.reg = utils.getopt(opt, 'reg_softmax')
   self.vocab_size = utils.getopt(opt, 'vocab_size') -- required
   self.input_encoding_size = utils.getopt(opt, 'input_encoding_size')
   self.rnn_size = utils.getopt(opt, 'rnn_size')
@@ -392,8 +393,9 @@ end
 -------------------------------------------------------------------------------
 
 local crit, parent = torch.class('nn.LanguageModelCriterion', 'nn.Criterion')
-function crit:__init()
+function crit:__init(opt)
   parent.__init(self)
+  self.reg = utils.getopt(opt, 'reg_softmax')
 end
 
 --[[
@@ -441,8 +443,8 @@ function crit:updateOutput(input, seq)
 
     end
   end
-  self.output = loss / n -- normalize by number of predictions that were made
-  self.gradInput:div(n)
+  self.output = self.reg * loss / n -- normalize by number of predictions that were made
+  self.gradInput:div(n):mul(self.reg)
   return self.output
 end
 

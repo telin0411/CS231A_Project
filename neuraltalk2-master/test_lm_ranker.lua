@@ -286,21 +286,21 @@ local function overfit()
   print('expected:', expected_params)
 
   local reg_ranker = 1
-  local reg_softmax = 0
+  local reg_softmax = 0.1
   local function lossFun()
     grad_params:zero()
     local output = lm:forward{imgs, seq}
     local softmax_loss = crit:forward(output, seq)
     softmax_loss = softmax_loss * reg_softmax
-    local sim_matrix, sembed = unpack(ranker:forward{imgs, output, lm.tmax})
+    local sim_matrix, sembed = unpack(ranker:forward{imgs, output, seq})
     local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
     ranking_loss = ranking_loss * reg_ranker
     local gradOutput = crit:backward(output, seq)
     gradOutput = gradOutput * reg_softmax
     local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
     dsim_matrix = dsim_matrix * reg_ranker
-    local dlogprobs_ranker, dsembed, dimgs_ranker =
-      unpack(ranker:backward({output, sembed, imgs}, dsim_matrix))
+    local dlogprobs_ranker, dsembed, dimgs_ranker, dummy =
+      unpack(ranker:backward({output, sembed, imgs, seq}, dsim_matrix))
     gradOutput = torch.add(gradOutput, dlogprobs_ranker)
     local loss = softmax_loss + ranking_loss
     lm:backward({imgs, seq}, gradOutput)
@@ -322,7 +322,7 @@ local function overfit()
     grad_cache:addcmul(1, grad_params, grad_params)
     ranker_grad_cache:addcmul(1, ranker_grad_params, ranker_grad_params)
     params:addcdiv(-1e-1, grad_params, torch.sqrt(grad_cache)) -- adagrad update
-    ranker_params:addcdiv(-1e-3, ranker_grad_params, torch.sqrt(ranker_grad_cache)) -- adagrad update
+    ranker_params:addcdiv(-1e-2, ranker_grad_params, torch.sqrt(ranker_grad_cache)) -- adagrad update
     print(string.format('iteration %d/30: loss %f softmax %f ranking %f', t, loss[1], loss[2], loss[3]))
   end
   -- holy crap adagrad destroys the loss function!
@@ -411,9 +411,9 @@ end
 -- tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 -- tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
-tests.gradCheckRankerLoss = gradCheckRankerLoss
+-- tests.gradCheckRankerLoss = gradCheckRankerLoss
 tests.gradCheck = gradCheck
-tests.gradCheckLM = gradCheckLM
+-- tests.gradCheckLM = gradCheckLM
 -- tests.overfit = overfit
 tests.sample = sample
 tests.sample_beam = sample_beam

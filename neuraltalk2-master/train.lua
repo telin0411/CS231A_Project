@@ -33,6 +33,8 @@ cmd:option('-rnn_size',512,'size of the rnn in number of hidden nodes in each la
 cmd:option('-input_encoding_size',512,'the encoding size of each token in the vocabulary, and the image.')
 
 -- Optimization: General
+cmd:option('-reg_softmax', 1, 'Weight for softmax loss')
+cmd:option('-reg_ranker', 5e-2, 'Weight for ranking loss')
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
 cmd:option('-batch_size',16,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
@@ -48,7 +50,7 @@ cmd:option('-optim_alpha',0.8,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 -- Optimization: for the Ranker Model
-cmd:option('-ranker_learning_rate',1e-6,'learning rate for the Ranker')
+cmd:option('-ranker_learning_rate',1e-5,'learning rate for the Ranker')
 -- Optimization: for the CNN
 cmd:option('-cnn_optim','adam','optimization to use for CNN')
 cmd:option('-cnn_optim_alpha',0.8,'alpha for momentum of CNN')
@@ -116,6 +118,7 @@ else
   rankerOpt.vocab_size = loader:getVocabSize()
   rankerOpt.input_encoding_size = opt.input_encoding_size
   rankerOpt.seq_length = loader:getSeqLength()
+  rankerOpt.reg_ranker = opt.reg_ranker
   protos.ranker = nn.Ranker(rankerOpt)
   -- intialize language model
   local lmOpt = {}
@@ -126,6 +129,7 @@ else
   lmOpt.dropout = opt.drop_prob_lm
   lmOpt.seq_length = loader:getSeqLength()
   lmOpt.batch_size = opt.batch_size * opt.seq_per_img
+  lmOpt.reg_softmax = opt.reg_softmax
   protos.lm = nn.LanguageModel(lmOpt)
   -- initialize the ConvNet
   local cnn_backend = opt.backend
@@ -137,9 +141,9 @@ else
   -- because doing a CNN forward pass is expensive. We expand out the CNN features for each sentence
   protos.expander = nn.FeatExpander(opt.seq_per_img)
   -- criterion for the language model
-  protos.crit = nn.LanguageModelCriterion()
+  protos.crit = nn.LanguageModelCriterion(lmOpt)
   --criterion for the ranker model
-  protos.crit_ranker = nn.RankerCriterion()
+  protos.crit_ranker = nn.RankerCriterion(rankerOpt)
 
   -- Ranker linear layer share weights with LM lookup table
   protos.ranker.linear_module.weight:set(protos.lm.lookup_table.weight:t())
@@ -212,7 +216,7 @@ local function eval_split(split, evalopt)
     local feats = protos.cnn:forward(data.images)
     local expanded_feats = protos.expander:forward(feats)
     local logprobs = protos.lm:forward{expanded_feats, data.labels}
-    local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, protos.lm.tmax})
+    local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
     local loss_softmax = protos.crit:forward(logprobs, data.labels)
     local loss_ranking = protos.crit_ranker:forward(sim_matrix, torch.Tensor())
     local loss = loss_softmax + loss_ranking
@@ -281,7 +285,7 @@ local function lossFun()
   -- forward the language model
   local logprobs = protos.lm:forward{expanded_feats, data.labels}
   -- forward the ranker model
-  local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, protos.lm.tmax})
+  local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
   -- forward the language model criterion
   local loss_softmax = protos.crit:forward(logprobs, data.labels)
   -- forward the ranker model criterion
@@ -296,8 +300,8 @@ local function lossFun()
   -- backprop language criterion
   local dlogprobs_lm = protos.crit:backward(logprobs, data.labels)
   -- backprop ranker model
-  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker =
-    unpack(protos.ranker:backward({logprobs, sembed, expanded_feats}, dsim_matrix))
+  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
+    unpack(protos.ranker:backward({logprobs, sembed, expanded_feats, data.labels}, dsim_matrix))
   local dlogprobs = dlogprobs_lm + dlogprobs_ranker
   -- backprop language model
   local dexpanded_feats_lm, ddummy =

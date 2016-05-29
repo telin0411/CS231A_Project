@@ -13,6 +13,7 @@ function layer:__init(opt)
   self.vocab_size = utils.getopt(opt, 'vocab_size') -- required
   self.input_encoding_size = utils.getopt(opt, 'input_encoding_size')
   self.seq_length = utils.getopt(opt, 'seq_length')
+  self.reg = utils.getopt(opt, 'reg_ranker')
   self.linear_module = nn.Linear(self.vocab_size + 1, self.input_encoding_size)
 end
 
@@ -110,8 +111,9 @@ end
 -------------------------------------------------------------------------------
 
 local crit, parent = torch.class('nn.RankerCriterion', 'nn.Criterion')
-function crit:__init()
+function crit:__init(opt)
   parent.__init(self)
+  self.reg = utils.getopt(opt, 'reg_ranker')
 end
 
 --[[
@@ -136,7 +138,7 @@ function crit:updateOutput(input, seq)
   margin_col = margin_col - utils.diag(utils.diag(margin_col)) -- set diagonal to 0
   ranking_loss = ranking_loss + torch.sum(margin_col)
 
-  ranking_loss = ranking_loss / N
+  ranking_loss = self.reg * ranking_loss / N
 
   -- Compute similarity matrix gradients
   self.dsim_matrix = torch.Tensor(input:size()):type(input:type()):zero()
@@ -148,8 +150,7 @@ function crit:updateOutput(input, seq)
   self.dsim_matrix = self.dsim_matrix + margin_col_mask
   self.dsim_matrix = self.dsim_matrix - utils.diag(torch.sum(margin_col_mask, 1):view(-1))
 
-  -- self.gradInput:div(N)
-  self.dsim_matrix:div(N)
+  self.dsim_matrix:div(N):mul(self.reg)
 
   self.output = ranking_loss
   return self.output
