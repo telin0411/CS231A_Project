@@ -33,8 +33,6 @@ cmd:option('-rnn_size',512,'size of the rnn in number of hidden nodes in each la
 cmd:option('-input_encoding_size',512,'the encoding size of each token in the vocabulary, and the image.')
 
 -- Optimization: General
-cmd:option('-reg_softmax', 1, 'Weight for softmax loss')
-cmd:option('-reg_ranker', 1e-6, 'Weight for ranking loss')
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
 cmd:option('-batch_size',16,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
@@ -43,6 +41,7 @@ cmd:option('-finetune_cnn_after', -1, 'After what iteration do we start finetuni
 cmd:option('-seq_per_img',5,'number of captions to sample for each image during training. Done for efficiency since CNN forward pass is expensive. E.g. coco has 5 sents/image')
 -- Optimization: for the Language Model
 cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
+cmd:option('-reg_softmax', 1, 'Weight for softmax loss')
 cmd:option('-learning_rate',4e-4,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
 cmd:option('-learning_rate_decay_every', 50000, 'every how many iterations thereafter to drop LR by half?')
@@ -51,9 +50,11 @@ cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 -- Optimization: for the Ranker Model
 cmd:option('-ranker_optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
+cmd:option('-reg_ranker', 1e-6, 'Weight for ranking loss')
+cmd:option('-max_reg_ranker', 5e-1, 'Max value for reg_ranker')
 cmd:option('-ranker_learning_rate',1e-5,'learning rate for the Ranker')
-cmd:option('-reg_rate_boost_start', 7500, 'at what iteration to start increasing reg rate? (-1 = dont)')
-cmd:option('-reg_rate_boost_every', 1000, 'every how many iterations thereafter to double reg rate?')
+cmd:option('-reg_rate_boost_start', 0, 'at what iteration to start increasing reg rate? (-1 = dont)')
+cmd:option('-reg_rate_boost_every', 2000, 'every how many iterations thereafter to double reg rate?')
 -- Optimization: for the CNN
 cmd:option('-cnn_optim','adam','optimization to use for CNN')
 cmd:option('-cnn_optim_alpha',0.8,'alpha for momentum of CNN')
@@ -424,12 +425,16 @@ while true do
 
   -- Boost reg_ranker
   local reg_ranker = opt.reg_ranker
-  if iter > opt.reg_rate_boost_start and opt.reg_rate_boost_start >= 0 and reg_ranker <= 1e-1 then
+  if iter > opt.reg_rate_boost_start and opt.reg_rate_boost_start >= 0 and reg_ranker <= opt.max_reg_ranker then
     local frac = (iter - opt.reg_rate_boost_start) / opt.reg_rate_boost_every
     local boost_factor = math.pow(2, frac)
     reg_ranker = reg_ranker * boost_factor
   end
-  print("reg_ranker: ", reg_ranker)
+  if reg_ranker > opt.max_reg_ranker then
+    reg_ranker = opt.max_reg_ranker
+  end
+  protos.ranker.reg = reg_ranker
+  print("reg_ranker: ", protos.ranker.reg)
 
   -- perform a parameter update
   if opt.optim == 'rmsprop' then
