@@ -355,6 +355,7 @@ while true do
   local ranking_loss_raw = losses.ranking_loss
   if protos.ranker.reg ~= 0 then
     ranking_loss_raw = losses.ranking_loss / protos.ranker.reg
+  end
   print(string.format('iter %d: %f softmax: %f ranking: %f', iter, losses.total_loss, losses.softmax_loss, losses.ranking_loss))
 
   -- save similarity matrix
@@ -380,12 +381,6 @@ while true do
     end
 
     local checkpoint_path = path.join(opt.checkpoint_path, 'model_id' .. opt.id)
-
-    -- -- save similarity matrix
-    -- local data = {}
-    -- data.sim_matrix = losses.sim_matrix
-    -- utils.write_json(checkpoint_path .. '_data.json', data)
-    -- print('save model data to ' .. checkpoint_path .. '_data.json')
 
     -- write a (thin) json report
     local checkpoint = {}
