@@ -346,6 +346,7 @@ local loss_history = {}
 local val_lang_stats_history = {}
 local val_loss_history = {}
 local best_score
+local iter_sim_matrix = 1
 while true do
 
   -- eval loss/gradient
@@ -354,6 +355,15 @@ while true do
   local ranking_loss_raw = losses.ranking_loss
   if protos.ranker.reg ~= 0 then
     ranking_loss_raw = losses.ranking_loss / protos.ranker.reg
+  print(string.format('iter %d: %f softmax: %f ranking: %f', iter, losses.total_loss, losses.softmax_loss, losses.ranking_loss))
+
+  -- save similarity matrix
+  if (iter % opt.save_sim_matrix_every == 0 or iter == opt.max_iters) then
+    local path = opt.checkpoint_path .. 'sim' .. opt.id .. '/'
+    local name = 'model_id' .. opt.id .. '_sim_matrix' .. iter_sim_matrix .. '.csv'
+    iter_sim_matrix = iter_sim_matrix + 1
+    utils.write_tensor(path, name, losses.sim_matrix:double())
+    print('save model data to ' .. path .. '/' .. name)
   end
   print(string.format('iter %d: %f softmax: %f ranking: %f raw ranking: %f', iter, losses.total_loss, losses.softmax_loss, losses.ranking_loss, ranking_loss_raw))
 
