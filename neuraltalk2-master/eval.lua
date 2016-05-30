@@ -9,6 +9,8 @@ require 'misc.DataLoader'
 require 'misc.DataLoaderRaw'
 require 'misc.LanguageModel'
 require 'misc.Ranker'
+require 'misc.RankerLSTM'
+require 'misc.RankerCriterion'
 local net_utils = require 'misc.net_utils'
 
 -------------------------------------------------------------------------------
@@ -48,6 +50,7 @@ cmd:option('-backend', 'cudnn', 'nn|cudnn')
 cmd:option('-id', 'evalscript', 'an id identifying this run/job. used only if language_eval = 1 for appending to intermediate files')
 cmd:option('-seed', 123, 'random number generator seed to use')
 cmd:option('-gpuid', 0, 'which gpu to use. -1 = use CPU')
+cmd:option('-ranker', 1, 'which ranker to use. 0 = linear, 1 = LSTM, 2 = BRNN')
 cmd:text()
 
 -------------------------------------------------------------------------------
@@ -131,7 +134,12 @@ local function eval_split(split, evalopt)
       local expanded_feats = protos.expander:forward(feats)
       local logprobs = protos.lm:forward{expanded_feats, data.labels}
       local loss_softmax = protos.crit:forward(logprobs, data.labels)
-      local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
+      local sim_matrix, sembed
+      if opt.ranker == 0 then
+        sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
+      else
+        sim_matrix, sembed, wembeds = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
+      end
       local loss_ranking = protos.crit_ranker:forward(sim_matrix, torch.Tensor())
       loss = loss_softmax + loss_ranking
       loss_sum = loss_sum + loss

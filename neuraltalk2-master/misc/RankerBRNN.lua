@@ -7,7 +7,7 @@ local net_utils = require 'misc.net_utils'
 -- Ranker Model
 -------------------------------------------------------------------------------
 
-local layer, parent = torch.class('nn.RankerLSTM', 'nn.Module')
+local layer, parent = torch.class('nn.RankerBRNN', 'nn.Module')
 function layer:__init(opt)
   parent.__init(self)
 
@@ -16,17 +16,20 @@ function layer:__init(opt)
   self.seq_length = utils.getopt(opt, 'seq_length')
   self.reg = utils.getopt(opt, 'reg_ranker')
   self.linear_module = nn.Linear(self.vocab_size + 1, self.input_encoding_size)
-  self.seqLSTM = nn.SeqLSTM(self.input_encoding_size, self.input_encoding_size)
-  self.seqLSTM.maskzero = true
+  self.fwd = nn.LSTM(self.input_encoding_size, self.input_encoding_size)
+  self.bwd = self.fwd:clone()
+  self.bwd:reset()
+  self.merge = nn.CAddTable()
+  self.seqBRNN = nn.BiSequencerLM(self.fwd, self.bwd, self.merge)
 end
 
 function layer:getModulesList()
-  return {self.linear_module, self.seqLSTM}
+  return {self.linear_module, self.seqBRNN}
 end
 
 function layer:parameters()
   local p1,g1 = self.linear_module:parameters()
-  local p2,g2 = self.seqLSTM:parameters()
+  local p2,g2 = self.seqBRNN:parameters()
 
   local params = {}
   for k,v in pairs(p1) do table.insert(params, v) end
@@ -65,15 +68,14 @@ function layer:updateOutput(input)
 
   local probs = torch.exp(logprobs) -- (D+2)xNx(M+1)
   local probs_mask = torch.cmul(probs, mask)
-  d = torch.LongStorage(3)
-  d[1] = D; d[2] = N; d[3] = K
-  local wembeds = utils.createTensor(logprobs:type(), d) -- DxNxK
+  local wembeds = {} -- table with D cells. Each cell is a 2D tensor of size NxK
   for t = 1,D do
-    wembeds[t] = self.linear_module:forward(probs_mask[t+1])
+    table.insert(wembeds, self.linear_module:forward(probs_mask[t+1]))
   end
 
-  -- take the last time step output as sentence embedding
-  local sembed = self.seqLSTM:forward(wembeds)[D] -- NxK
+  -- sum the first and last time step output as sentence embedding
+  local sembedD = self.seqBRNN:forward(wembeds) -- NxK
+  local sembed = sembedD[2] + sembedD[D-1]
   local sim_matrix = imgs * sembed:t()
 
   self.output = {sim_matrix, sembed, wembeds}
@@ -96,7 +98,7 @@ function layer:updateGradInput(input, gradOutput)
   local dsim_matrix = gradOutput -- NxN
   local logprobs = input[1] -- (D+2)xNx(M+1)
   local sembed = input[2] -- NxK
-  local wembeds = input[3] -- DxNxK
+  local wembeds = input[3] -- table with D cells. Each cell is a 2D tensor of size NxK
   local imgs = input[4] -- NxK
   local seq = input[5] -- DxN
   local L, N, M1 = logprobs:size(1),logprobs:size(2), logprobs:size(3)
@@ -111,9 +113,12 @@ function layer:updateGradInput(input, gradOutput)
 
   local dimgs = dsim_matrix * sembed
   local dsembed = dsim_matrix:t() * imgs -- NxK
-  local dsembed_D = utils.createTensor(dsembed:type(), wembeds:size())
-  dsembed_D[D] = dsembed
-  local dwembeds = self.seqLSTM:backward(wembeds, dsembed_D) -- DxNxK
+  local dsembedD = {}
+  for t = 1,D do
+    table.insert(dsembedD, utils.createTensor(dsembed:type(), dsembed:size()))
+  end
+  dsembedD[2] = dsembed; dsembedD[D-1] = dsembed
+  local dwembeds = self.seqBRNN:backward(wembeds, dsembedD)
   local dprobs_mask = utils.createTensor(probs_mask:type(), probs_mask:size())
   for t = 1,D do
     dprobs_mask[t+1] = self.linear_module:backward(probs_mask[t+1], dwembeds[t])

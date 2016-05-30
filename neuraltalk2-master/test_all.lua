@@ -7,11 +7,23 @@ and that everything gradient checks.
 require 'torch'
 require 'misc.LanguageModel'
 require 'misc.RankerLSTM'
+require 'misc.RankerBRNN'
+require 'misc.RankerCriterion'
 
 local gradcheck = require 'misc.gradcheck'
 
 local tests = {}
 local tester = torch.Tester()
+
+cmd = torch.CmdLine()
+cmd:text()
+cmd:text('Test image captioning model with RankerLSTM/RankerBRNN')
+cmd:text()
+cmd:text('Options')
+cmd:option('-ranker', 0, 'which ranker to use. 0 = use RankerLSTM')
+cmd:text()
+
+local optGlobal = cmd:parse(arg)
 
 -- validates the size and dimensions of a given
 -- tensor a to be size given in table sz
@@ -45,7 +57,12 @@ local function forwardApiTestFactory(dtype)
     rankerOpt.seq_length = lmOpt.seq_length
     rankerOpt.reg_ranker = 5e-2
     local lm = nn.LanguageModel(lmOpt)
-    local ranker = nn.RankerLSTM(rankerOpt)
+    local ranker
+    if optGlobal.ranker == 0 then
+      ranker = nn.RankerLSTM(rankerOpt)
+    else
+      ranker = nn.RankerBRNN(rankerOpt)
+    end
     local lmCrit = nn.LanguageModelCriterion(lmOpt)
     local rankerCrit = nn.RankerCriterion(rankerOpt)
     lm:type(dtype)
@@ -74,7 +91,7 @@ local function forwardApiTestFactory(dtype)
     tester:assertTensorSizeEq(logprobs, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
     tester:assertTensorSizeEq(sim_matrix, {lmOpt.batch_size, lmOpt.batch_size})
     tester:assertTensorSizeEq(sembed, {lmOpt.batch_size, lmOpt.input_encoding_size})
-    tester:assertTensorSizeEq(wembeds, {lmOpt.seq_length, lmOpt.batch_size, lmOpt.input_encoding_size})
+    -- tester:assertTensorSizeEq(wembeds, {lmOpt.seq_length, lmOpt.batch_size, lmOpt.input_encoding_size})
 
     local loss_softmax = lmCrit:forward(logprobs, seq)
     local loss_ranking = rankerCrit:forward(sim_matrix, torch.Tensor())
@@ -89,7 +106,7 @@ local function forwardApiTestFactory(dtype)
     tester:assertTensorSizeEq(dlogprobs_lm, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
     tester:assertTensorSizeEq(dlogprobs_ranker, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
     tester:assertTensorSizeEq(dsembed, {lmOpt.batch_size, lmOpt.input_encoding_size})
-    tester:assertTensorSizeEq(dwembeds, {lmOpt.seq_length, lmOpt.batch_size, lmOpt.input_encoding_size})
+    -- tester:assertTensorSizeEq(dwembeds, {lmOpt.seq_length, lmOpt.batch_size, lmOpt.input_encoding_size})
     tester:assertTensorSizeEq(dexpanded_feats_ranker, {lmOpt.batch_size, lmOpt.input_encoding_size})
 
     local gradOutput = dlogprobs_lm + dlogprobs_ranker
@@ -177,7 +194,12 @@ local function gradCheckRankerLoss()
   opt.reg_ranker = 5e-2
 
   -- create Ranker instance
-  local ranker = nn.RankerLSTM(opt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(opt)
+  else
+    ranker = nn.RankerBRNN(opt)
+  end
   local crit_ranker = nn.RankerCriterion(opt)
   ranker:type(dtype)
   crit_ranker:type(dtype)
@@ -215,7 +237,12 @@ local function gradCheckLogProbsRanker()
   rankerOpt.input_encoding_size = lmOpt.input_encoding_size
   rankerOpt.seq_length = lmOpt.seq_length
   local lm = nn.LanguageModel(lmOpt)
-  local ranker = nn.RankerLSTM(rankerOpt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(rankerOpt)
+  else
+    ranker = nn.RankerBRNN(rankerOpt)
+  end
   lm:type(dtype)
   ranker:type(dtype)
 
@@ -264,7 +291,12 @@ local function gradCheckRankerImgs()
   rankerOpt.input_encoding_size = lmOpt.input_encoding_size
   rankerOpt.seq_length = lmOpt.seq_length
   local lm = nn.LanguageModel(lmOpt)
-  local ranker = nn.RankerLSTM(rankerOpt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(rankerOpt)
+  else
+    ranker = nn.RankerBRNN(rankerOpt)
+  end
   lm:type(dtype)
   ranker:type(dtype)
 
@@ -313,7 +345,12 @@ local function gradCheckRanker()
   rankerOpt.input_encoding_size = lmOpt.input_encoding_size
   rankerOpt.seq_length = lmOpt.seq_length
   local lm = nn.LanguageModel(lmOpt)
-  local ranker = nn.RankerLSTM(rankerOpt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(rankerOpt)
+  else
+    ranker = nn.RankerBRNN(rankerOpt)
+  end
   lm:type(dtype)
   ranker:type(dtype)
 
@@ -376,7 +413,12 @@ local function gradCheck()
   crit:type(dtype)
 
   -- create Ranker instance
-  local ranker = nn.RankerLSTM(opt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(opt)
+  else
+    ranker = nn.RankerBRNN(opt)
+  end
   local crit_ranker = nn.RankerCriterion(opt)
   ranker:type(dtype)
   crit_ranker:type(dtype)
@@ -449,7 +491,12 @@ local function overfit()
   crit:type(dtype)
 
   -- create Ranker instance
-  local ranker = nn.RankerLSTM(opt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(opt)
+  else
+    ranker = nn.RankerBRNN(opt)
+  end
   local crit_ranker = nn.RankerCriterion(opt)
   ranker:type(dtype)
   crit_ranker:type(dtype)
@@ -596,15 +643,15 @@ end
 -- tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 -- tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
--- tests.gradCheckRankerLoss = gradCheckRankerLoss
--- tests.gradCheckRanker = gradCheckRanker
--- tests.gradCheckRankerImgs = gradCheckRankerImgs
--- tests.gradCheckLogProbsRanker = gradCheckLogProbsRanker
+tests.gradCheckRankerLoss = gradCheckRankerLoss
+tests.gradCheckRanker = gradCheckRanker
+tests.gradCheckRankerImgs = gradCheckRankerImgs
+tests.gradCheckLogProbsRanker = gradCheckLogProbsRanker
 -- tests.gradCheck = gradCheck
 -- tests.gradCheckLM = gradCheckLM
 -- tests.sample = sample
 -- tests.sample_beam = sample_beam
-tests.overfit = overfit
+-- tests.overfit = overfit
 
 tester:add(tests)
 tester:run()
