@@ -347,6 +347,7 @@ local loss_history = {}
 local val_lang_stats_history = {}
 local val_loss_history = {}
 local best_score
+local iter_sim_matrix = 1
 while true do
 
   -- eval loss/gradient
@@ -356,8 +357,11 @@ while true do
 
   -- save similarity matrix
   if (iter % opt.save_sim_matrix_every == 0 or iter == opt.max_iters) then
-    utils.write_tensor(opt.checkpoint_path .. 'sim' .. opt.id .. '/', 'model_id' .. opt.id .. '_sim_matrix' .. iter .. '.csv', losses.sim_matrix:double())
-    print('save model data to ' .. checkpoint_path .. '_data.csv')
+    local path = opt.checkpoint_path .. 'sim' .. opt.id .. '/'
+    local name = 'model_id' .. opt.id .. '_sim_matrix' .. iter_sim_matrix .. '.csv'
+    iter_sim_matrix = iter_sim_matrix + 1
+    utils.write_tensor(path, name, losses.sim_matrix:double())
+    print('save model data to ' .. path .. '/' .. name)
   end
 
   -- save checkpoint once in a while (or on final iteration)
