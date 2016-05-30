@@ -1,4 +1,5 @@
 local cjson = require 'cjson'
+local lfs = require 'lfs'
 local utils = {}
 
 -- Assume required if default_value is nil
@@ -29,9 +30,12 @@ function utils.write_json(path, j)
   file:close()
 end
 
-function utils.write_tensor(path, tensor)
-    local out = assert(io.open(path, 'w')) -- open a file for serialization
+function utils.write_tensor(path, name, tensor)
+    if not lfs.attributes(path, 'mode') then
+        lfs.mkdir(path)
+    end
 
+    local out = assert(io.open(path .. name, 'w')) -- open a file for serialization
     splitter = ','
     for i = 1, tensor:size(1) do
         for j = 1, tensor:size(2) do
