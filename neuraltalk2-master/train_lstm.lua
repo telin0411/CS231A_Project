@@ -65,7 +65,6 @@ cmd:option('-cnn_weight_decay', 0, 'L2 weight decay just for the CNN')
 -- Evaluation/Checkpointing
 cmd:option('-val_images_use', 3200, 'how many images to use when periodically evaluating the validation loss? (-1 = all)')
 cmd:option('-save_checkpoint_every', 2500, 'how often to save a model checkpoint?')
-cmd:option('-save_sim_matrix_every', 300, 'how often to save a similarity matrix?')
 cmd:option('-checkpoint_path', '', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-language_eval', 0, 'Evaluate language as well (1 = yes, 0 = no)? BLEU/CIDEr/METEOR/ROUGE_L? requires coco-caption code from Github.')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
@@ -352,16 +351,15 @@ while true do
   -- eval loss/gradient
   local losses = lossFun()
   if iter % opt.losses_log_every == 0 then loss_history[iter] = losses.total_loss end
-  print(string.format('iter %d: %f softmax: %f ranking: %f', iter, losses.total_loss, losses.softmax_loss, losses.ranking_loss))
-
-  -- save similarity matrix
-  if (iter % opt.save_sim_matrix_every == 0 or iter == opt.max_iters) then
-    utils.write_tensor(opt.checkpoint_path .. 'sim' .. opt.id .. '/', 'model_id' .. opt.id .. '_sim_matrix' .. iter .. '.csv', losses.sim_matrix:double())
-    print('save model data to ' .. checkpoint_path .. '_data.csv')
+  local ranking_loss_raw = losses.ranking_loss
+  if protos.ranker.reg ~= 0 then
+    ranking_loss_raw = losses.ranking_loss / protos.ranker.reg
   end
+  print(string.format('iter %d: %f softmax: %f ranking: %f raw ranking: %f', iter, losses.total_loss, losses.softmax_loss, losses.ranking_loss, ranking_loss_raw))
 
   -- save checkpoint once in a while (or on final iteration)
   if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then
+
     -- evaluate the validation performance
     local val_loss, val_predictions, lang_stats = eval_split('val', {val_images_use = opt.val_images_use})
     print('validation loss: ', val_loss)
@@ -372,6 +370,12 @@ while true do
     end
 
     local checkpoint_path = path.join(opt.checkpoint_path, 'model_id' .. opt.id)
+
+    -- -- save similarity matrix
+    -- local data = {}
+    -- data.sim_matrix = losses.sim_matrix
+    -- utils.write_json(checkpoint_path .. '_data.json', data)
+    -- print('save model data to ' .. checkpoint_path .. '_data.json')
 
     -- write a (thin) json report
     local checkpoint = {}
