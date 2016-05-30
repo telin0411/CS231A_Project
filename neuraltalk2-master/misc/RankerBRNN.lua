@@ -75,7 +75,7 @@ function layer:updateOutput(input)
 
   -- sum the first and last time step output as sentence embedding
   local sembedD = self.seqBRNN:forward(wembeds) -- NxK
-  local sembed = sembedD[2] + sembedD[D-1]
+  local sembed = sembedD[1] + sembedD[D]
   local sim_matrix = imgs * sembed:t()
 
   self.output = {sim_matrix, sembed, wembeds}
@@ -117,7 +117,7 @@ function layer:updateGradInput(input, gradOutput)
   for t = 1,D do
     table.insert(dsembedD, utils.createTensor(dsembed:type(), dsembed:size()))
   end
-  dsembedD[2] = dsembed; dsembedD[D-1] = dsembed
+  dsembedD[1] = dsembed; dsembedD[D] = dsembed
   local dwembeds = self.seqBRNN:backward(wembeds, dsembedD)
   local dprobs_mask = utils.createTensor(probs_mask:type(), probs_mask:size())
   for t = 1,D do

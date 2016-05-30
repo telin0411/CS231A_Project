@@ -643,10 +643,10 @@ end
 -- tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 -- tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
-tests.gradCheckRankerLoss = gradCheckRankerLoss
+-- tests.gradCheckRankerLoss = gradCheckRankerLoss
 tests.gradCheckRanker = gradCheckRanker
-tests.gradCheckRankerImgs = gradCheckRankerImgs
-tests.gradCheckLogProbsRanker = gradCheckLogProbsRanker
+-- tests.gradCheckRankerImgs = gradCheckRankerImgs
+-- tests.gradCheckLogProbsRanker = gradCheckLogProbsRanker
 -- tests.gradCheck = gradCheck
 -- tests.gradCheckLM = gradCheckLM
 -- tests.sample = sample
