@@ -9,6 +9,7 @@ local utils = require 'misc.utils'
 require 'misc.DataLoader'
 require 'misc.LanguageModel'
 require 'misc.RankerLSTM'
+require 'misc.RankerCriterion'
 local net_utils = require 'misc.net_utils'
 require 'misc.optim_updates'
 
@@ -75,6 +76,7 @@ cmd:option('-backend', 'cudnn', 'nn|cudnn')
 cmd:option('-id', '', 'an id identifying this run/job. used in cross-val and appended when writing progress files')
 cmd:option('-seed', 123, 'random number generator seed to use')
 cmd:option('-gpuid', 0, 'which gpu to use. -1 = use CPU')
+cmd:option('-ranker', 0, 'which ranker to use. 0 = LSTM, 1 = BRNN')
 
 cmd:text()
 
@@ -124,7 +126,11 @@ else
   rankerOpt.input_encoding_size = opt.input_encoding_size
   rankerOpt.seq_length = loader:getSeqLength()
   rankerOpt.reg_ranker = opt.reg_ranker
-  protos.ranker = nn.RankerLSTM(rankerOpt)
+  if opt.ranker == 0 then
+    protos.ranker = nn.RankerLSTM(rankerOpt)
+  else
+    protos.ranker = nn.RankerBRNN(rankerOpt)
+  end
   -- intialize language model
   local lmOpt = {}
   lmOpt.vocab_size = loader:getVocabSize()
