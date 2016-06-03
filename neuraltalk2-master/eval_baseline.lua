@@ -8,9 +8,6 @@ local utils = require 'misc.utils'
 require 'misc.DataLoader'
 require 'misc.DataLoaderRaw'
 require 'misc.LanguageModel'
-require 'misc.Ranker'
-require 'misc.RankerLSTM'
-require 'misc.RankerCriterion'
 local net_utils = require 'misc.net_utils'
 
 -------------------------------------------------------------------------------
@@ -26,7 +23,6 @@ cmd:text('Options')
 cmd:option('-model','','path to model to evaluate')
 -- Basic options
 cmd:option('-reg_softmax', 1, 'Weight for softmax loss')
-cmd:option('-reg_ranker', 1e-1, 'Weight for ranking loss')
 cmd:option('-batch_size', 1, 'if > 0 then overrule, otherwise load from checkpoint.')
 cmd:option('-num_images', 100, 'how many images to use when periodically evaluating the loss? (-1 = all)')
 cmd:option('-language_eval', 0, 'Evaluate language as well (1 = yes, 0 = no)? BLEU/CIDEr/METEOR/ROUGE_L? requires coco-caption code from Github.')
@@ -50,7 +46,6 @@ cmd:option('-backend', 'cudnn', 'nn|cudnn')
 cmd:option('-id', 'evalscript', 'an id identifying this run/job. used only if language_eval = 1 for appending to intermediate files')
 cmd:option('-seed', 123, 'random number generator seed to use')
 cmd:option('-gpuid', 0, 'which gpu to use. -1 = use CPU')
-cmd:option('-ranker', 1, 'which ranker to use. 0 = linear, 1 = LSTM, 2 = BRNN')
 cmd:text()
 
 -------------------------------------------------------------------------------
@@ -99,7 +94,6 @@ end
 local protos = checkpoint.protos
 protos.expander = nn.FeatExpander(opt.seq_per_img)
 protos.crit = nn.LanguageModelCriterion(opt)
-protos.crit_ranker = nn.RankerCriterion(opt)
 protos.lm:createClones() -- reconstruct clones inside the language model
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 
@@ -112,7 +106,6 @@ local function eval_split(split, evalopt)
 
   protos.cnn:evaluate()
   protos.lm:evaluate()
-  protos.ranker:evaluate()
   loader:resetIterator(split) -- rewind iteator back to first datapoint in the split
   local n = 0
   local loss_sum = 0
@@ -133,15 +126,7 @@ local function eval_split(split, evalopt)
     if data.labels then
       local expanded_feats = protos.expander:forward(feats)
       local logprobs = protos.lm:forward{expanded_feats, data.labels}
-      local loss_softmax = protos.crit:forward(logprobs, data.labels)
-      local sim_matrix, sembed
-      if opt.ranker == 0 then
-        sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
-      else
-        sim_matrix, sembed, wembeds = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
-      end
-      local loss_ranking = protos.crit_ranker:forward(sim_matrix, torch.Tensor())
-      loss = loss_softmax + loss_ranking
+      loss = protos.crit:forward(logprobs, data.labels)
       loss_sum = loss_sum + loss
       loss_evals = loss_evals + 1
     end

@@ -1,4 +1,5 @@
 local cjson = require 'cjson'
+local lfs = require 'lfs'
 local utils = {}
 
 -- Assume required if default_value is nil
@@ -27,6 +28,58 @@ function utils.write_json(path, j)
   local file = io.open(path, 'w')
   file:write(text)
   file:close()
+end
+
+function utils.write_tensor(path, name, tensor)
+    if not lfs.attributes(path, 'mode') then
+        lfs.mkdir(path)
+    end
+
+    local out = assert(io.open(path .. name, 'w')) -- open a file for serialization
+    splitter = ','
+    for i = 1, tensor:size(1) do
+        for j = 1, tensor:size(2) do
+            out:write(tensor[i][j])
+            if j == tensor:size(2) then
+                out:write('\n')
+            else
+                out:write(splitter)
+            end
+        end
+    end
+end
+
+function utils.createTensor(type, size)
+    if type == 'torch.DoubleTensor' then
+        return torch.DoubleTensor(size):zero()
+    elseif type == 'torch.FloatTensor' then
+        return torch.FloatTensor(size):zero()
+    elseif type == 'torch.CudaTensor' then
+        return torch.CudaTensor(size):zero()
+    else
+        return nil
+    end
+end
+
+function utils.diag(matrix)
+    N = matrix:size(1)
+
+    if matrix:size():size() == 2 then
+        sz = torch.LongStorage({N})
+        matrix_diag = utils.createTensor(matrix:type(), sz):zero()
+        for i = 1, N do
+            matrix_diag[i] = matrix[i][i]
+        end
+    elseif matrix:size():size() == 1 then
+        sz = torch.LongStorage({N, N})
+        matrix_diag = utils.createTensor(matrix:type(), sz):zero()
+        for i = 1, N do
+            matrix_diag[i][i] = matrix[i]
+        end
+    else
+        matrix_diag = nil
+    end
+    return matrix_diag
 end
 
 -- dicts is a list of tables of k:v pairs, create a single

@@ -12,6 +12,7 @@ function layer:__init(opt)
   parent.__init(self)
 
   -- options for core network
+  self.reg = utils.getopt(opt, 'reg_softmax')
   self.vocab_size = utils.getopt(opt, 'vocab_size') -- required
   self.input_encoding_size = utils.getopt(opt, 'input_encoding_size')
   self.rnn_size = utils.getopt(opt, 'rnn_size')
@@ -65,7 +66,7 @@ function layer:parameters()
   local params = {}
   for k,v in pairs(p1) do table.insert(params, v) end
   for k,v in pairs(p2) do table.insert(params, v) end
-  
+
   local grad_params = {}
   for k,v in pairs(g1) do table.insert(grad_params, v) end
   for k,v in pairs(g2) do table.insert(grad_params, v) end
@@ -92,7 +93,7 @@ end
 --[[
 takes a batch of images and runs the model forward in sampling mode
 Careful: make sure model is in :evaluate() mode if you're calling this.
-Returns: a DxN LongTensor with integer elements 1..M, 
+Returns: a DxN LongTensor with integer elements 1..M,
 where D is sequence length and N is batch (so columns are sequences)
 --]]
 function layer:sample(imgs, opt)
@@ -141,7 +142,7 @@ function layer:sample(imgs, opt)
       xt = self.lookup_table:forward(it)
     end
 
-    if t >= 3 then 
+    if t >= 3 then
       seq[t-2] = it -- record the samples
       seqLogprobs[t-2] = sampleLogprobs:view(-1):float() -- and also their log likelihoods
     end
@@ -158,9 +159,9 @@ function layer:sample(imgs, opt)
 end
 
 --[[
-Implements beam search. Really tricky indexing stuff going on inside. 
+Implements beam search. Really tricky indexing stuff going on inside.
 Not 100% sure it's correct, and hard to fully unit test to satisfaction, but
-it seems to work, doesn't crash, gives expected looking outputs, and seems to 
+it seems to work, doesn't crash, gives expected looking outputs, and seems to
 improve performance, so I am declaring this correct.
 ]]--
 function layer:sample_beam(imgs, opt)
@@ -248,13 +249,13 @@ function layer:sample_beam(imgs, opt)
           if v.c == self.vocab_size+1 or t == self.seq_length+2 then
             -- END token special case here, or we reached the end.
             -- add the beam to a set of done beams
-            table.insert(done_beams, {seq = beam_seq[{ {}, vix }]:clone(), 
+            table.insert(done_beams, {seq = beam_seq[{ {}, vix }]:clone(),
                                       logps = beam_seq_logprobs[{ {}, vix }]:clone(),
                                       p = beam_logprobs_sum[vix]
                                      })
           end
         end
-        
+
         -- encode as vectors
         it = beam_seq[t-2]
         xt = self.lookup_table:forward(it)
@@ -284,8 +285,8 @@ input is a tuple of:
 2. torch.LongTensor of size DxN, elements 1..M
    where M = opt.vocab_size and D = opt.seq_length
 
-returns a (D+2)xNx(M+1) Tensor giving (normalized) log probabilities for the 
-next token at every iteration of the LSTM (+2 because +1 for first dummy 
+returns a (D+2)xNx(M+1) Tensor giving (normalized) log probabilities for the
+next token at every iteration of the LSTM (+2 because +1 for first dummy
 img forward, and another +1 because of START/END tokens shift)
 --]]
 function layer:updateOutput(input)
@@ -296,7 +297,7 @@ function layer:updateOutput(input)
   assert(seq:size(1) == self.seq_length)
   local batch_size = seq:size(2)
   self.output:resize(self.seq_length+2, batch_size, self.vocab_size+1)
-  
+
   self:_createInitState(batch_size)
 
   self.state = {[0] = self.init_state}
@@ -321,7 +322,7 @@ function layer:updateOutput(input)
       if torch.sum(it) == 0 then
         -- computational shortcut for efficiency. All sequences have already terminated and only
         -- contain null tokens from here on. We can skip the rest of the forward pass and save time
-        can_skip = true 
+        can_skip = true
       end
       --[[
         seq may contain zeros as null tokens, make sure we take them out to any arbitrary token
@@ -372,7 +373,7 @@ function layer:updateGradInput(input, gradOutput)
     local dxt = dinputs[1] -- first element is the input vector
     dstate[t-1] = {} -- copy over rest to state grad
     for k=2,self.num_state+1 do table.insert(dstate[t-1], dinputs[k]) end
-    
+
     -- continue backprop of xt
     if t == 1 then
       dimgs = dxt
@@ -392,8 +393,9 @@ end
 -------------------------------------------------------------------------------
 
 local crit, parent = torch.class('nn.LanguageModelCriterion', 'nn.Criterion')
-function crit:__init()
+function crit:__init(opt)
   parent.__init(self)
+  self.reg = utils.getopt(opt, 'reg_softmax')
 end
 
 --[[
@@ -441,8 +443,8 @@ function crit:updateOutput(input, seq)
 
     end
   end
-  self.output = loss / n -- normalize by number of predictions that were made
-  self.gradInput:div(n)
+  self.output = self.reg * loss / n -- normalize by number of predictions that were made
+  self.gradInput:div(n):mul(self.reg)
   return self.output
 end
 

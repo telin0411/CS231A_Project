@@ -8,7 +8,8 @@ require 'loadcaffe'
 local utils = require 'misc.utils'
 require 'misc.DataLoader'
 require 'misc.LanguageModel'
-require 'misc.Ranker'
+require 'misc.RankerLSTM'
+require 'misc.RankerCriterion'
 local net_utils = require 'misc.net_utils'
 require 'misc.optim_updates'
 
@@ -33,8 +34,6 @@ cmd:option('-rnn_size',512,'size of the rnn in number of hidden nodes in each la
 cmd:option('-input_encoding_size',512,'the encoding size of each token in the vocabulary, and the image.')
 
 -- Optimization: General
-cmd:option('-reg_softmax', 1, 'Weight for softmax loss')
-cmd:option('-reg_ranker', 5e-2, 'Weight for ranking loss')
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
 cmd:option('-batch_size',16,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
@@ -43,6 +42,7 @@ cmd:option('-finetune_cnn_after', -1, 'After what iteration do we start finetuni
 cmd:option('-seq_per_img',5,'number of captions to sample for each image during training. Done for efficiency since CNN forward pass is expensive. E.g. coco has 5 sents/image')
 -- Optimization: for the Language Model
 cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
+cmd:option('-reg_softmax', 1, 'Weight for softmax loss')
 cmd:option('-learning_rate',4e-4,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
 cmd:option('-learning_rate_decay_every', 50000, 'every how many iterations thereafter to drop LR by half?')
@@ -51,7 +51,11 @@ cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 -- Optimization: for the Ranker Model
 cmd:option('-ranker_optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
+cmd:option('-reg_ranker', 1e-6, 'Weight for ranking loss')
+cmd:option('-max_reg_ranker', 5e-1, 'Max value for reg_ranker')
 cmd:option('-ranker_learning_rate',1e-5,'learning rate for the Ranker')
+cmd:option('-reg_rate_boost_start', 0, 'at what iteration to start increasing reg rate? (-1 = dont)')
+cmd:option('-reg_rate_boost_every', 2000, 'every how many iterations thereafter to double reg rate?')
 -- Optimization: for the CNN
 cmd:option('-cnn_optim','adam','optimization to use for CNN')
 cmd:option('-cnn_optim_alpha',0.8,'alpha for momentum of CNN')
@@ -62,6 +66,7 @@ cmd:option('-cnn_weight_decay', 0, 'L2 weight decay just for the CNN')
 -- Evaluation/Checkpointing
 cmd:option('-val_images_use', 3200, 'how many images to use when periodically evaluating the validation loss? (-1 = all)')
 cmd:option('-save_checkpoint_every', 2500, 'how often to save a model checkpoint?')
+cmd:option('-save_sim_matrix_every', 300, 'how often to save the similarity matrix?')
 cmd:option('-checkpoint_path', '', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-language_eval', 0, 'Evaluate language as well (1 = yes, 0 = no)? BLEU/CIDEr/METEOR/ROUGE_L? requires coco-caption code from Github.')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
@@ -71,6 +76,7 @@ cmd:option('-backend', 'cudnn', 'nn|cudnn')
 cmd:option('-id', '', 'an id identifying this run/job. used in cross-val and appended when writing progress files')
 cmd:option('-seed', 123, 'random number generator seed to use')
 cmd:option('-gpuid', 0, 'which gpu to use. -1 = use CPU')
+cmd:option('-ranker', 0, 'which ranker to use. 0 = LSTM, 1 = BRNN')
 
 cmd:text()
 
@@ -120,7 +126,11 @@ else
   rankerOpt.input_encoding_size = opt.input_encoding_size
   rankerOpt.seq_length = loader:getSeqLength()
   rankerOpt.reg_ranker = opt.reg_ranker
-  protos.ranker = nn.Ranker(rankerOpt)
+  if opt.ranker == 0 then
+    protos.ranker = nn.RankerLSTM(rankerOpt)
+  else
+    protos.ranker = nn.RankerBRNN(rankerOpt)
+  end
   -- intialize language model
   local lmOpt = {}
   lmOpt.vocab_size = loader:getVocabSize()
@@ -217,7 +227,7 @@ local function eval_split(split, evalopt)
     local feats = protos.cnn:forward(data.images)
     local expanded_feats = protos.expander:forward(feats)
     local logprobs = protos.lm:forward{expanded_feats, data.labels}
-    local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
+    local sim_matrix, sembed, wembeds = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
     local loss_softmax = protos.crit:forward(logprobs, data.labels)
     local loss_ranking = protos.crit_ranker:forward(sim_matrix, torch.Tensor())
     local loss = loss_softmax + loss_ranking
@@ -286,7 +296,7 @@ local function lossFun()
   -- forward the language model
   local logprobs = protos.lm:forward{expanded_feats, data.labels}
   -- forward the ranker model
-  local sim_matrix, sembed = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
+  local sim_matrix, sembed, wembeds = unpack(protos.ranker:forward{expanded_feats, logprobs, data.labels})
   -- forward the language model criterion
   local loss_softmax = protos.crit:forward(logprobs, data.labels)
   -- forward the ranker model criterion
@@ -301,8 +311,8 @@ local function lossFun()
   -- backprop language criterion
   local dlogprobs_lm = protos.crit:backward(logprobs, data.labels)
   -- backprop ranker model
-  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
-    unpack(protos.ranker:backward({logprobs, sembed, expanded_feats, data.labels}, dsim_matrix))
+  local dlogprobs_ranker, dsembed, dwembeds, dexpanded_feats_ranker, dummy =
+    unpack(protos.ranker:backward({logprobs, sembed, wembeds, expanded_feats, data.labels}, dsim_matrix))
   local dlogprobs = dlogprobs_lm + dlogprobs_ranker
   -- backprop language model
   local dexpanded_feats_lm, ddummy =
@@ -343,12 +353,27 @@ local loss_history = {}
 local val_lang_stats_history = {}
 local val_loss_history = {}
 local best_score
+local iter_sim_matrix = 1
 while true do
 
   -- eval loss/gradient
   local losses = lossFun()
   if iter % opt.losses_log_every == 0 then loss_history[iter] = losses.total_loss end
+  local ranking_loss_raw = losses.ranking_loss
+  if protos.ranker.reg ~= 0 then
+    ranking_loss_raw = losses.ranking_loss / protos.ranker.reg
+  end
   print(string.format('iter %d: %f softmax: %f ranking: %f', iter, losses.total_loss, losses.softmax_loss, losses.ranking_loss))
+
+  -- save similarity matrix
+  if (iter % opt.save_sim_matrix_every == 0 or iter == opt.max_iters) then
+    local path = opt.checkpoint_path .. 'sim' .. opt.id .. '/'
+    local name = 'model_id' .. opt.id .. '_sim_matrix' .. iter_sim_matrix .. '.csv'
+    iter_sim_matrix = iter_sim_matrix + 1
+    utils.write_tensor(path, name, losses.sim_matrix:double())
+    print('save model data to ' .. path .. '/' .. name)
+  end
+  print(string.format('iter %d: %f softmax: %f ranking: %f raw ranking: %f', iter, losses.total_loss, losses.softmax_loss, losses.ranking_loss, ranking_loss_raw))
 
   -- save checkpoint once in a while (or on final iteration)
   if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then
@@ -363,10 +388,6 @@ while true do
     end
 
     local checkpoint_path = path.join(opt.checkpoint_path, 'model_id' .. opt.id)
-
-    -- save similarity matrix
-    utils.write_tensor(checkpoint_path .. '_data.csv', losses.sim_matrix:double())
-    print('save model data to ' .. checkpoint_path .. '_data.csv')
 
     -- write a (thin) json report
     local checkpoint = {}
@@ -417,6 +438,19 @@ while true do
     learning_rate = learning_rate * decay_factor -- set the decayed rate
     cnn_learning_rate = cnn_learning_rate * decay_factor
   end
+
+  -- Boost reg_ranker
+  local reg_ranker = opt.reg_ranker
+  if iter > opt.reg_rate_boost_start and opt.reg_rate_boost_start >= 0 and reg_ranker <= opt.max_reg_ranker then
+    local frac = (iter - opt.reg_rate_boost_start) / opt.reg_rate_boost_every
+    local boost_factor = math.pow(2, frac)
+    reg_ranker = reg_ranker * boost_factor
+  end
+  if reg_ranker > opt.max_reg_ranker then
+    reg_ranker = opt.max_reg_ranker
+  end
+  protos.ranker.reg = reg_ranker
+  print("reg_ranker: ", protos.ranker.reg)
 
   -- perform a parameter update
   if opt.optim == 'rmsprop' then

@@ -6,12 +6,24 @@ and that everything gradient checks.
 
 require 'torch'
 require 'misc.LanguageModel'
-require 'misc.Ranker'
+require 'misc.RankerLSTM'
+require 'misc.RankerBRNN'
+require 'misc.RankerCriterion'
 
 local gradcheck = require 'misc.gradcheck'
 
 local tests = {}
 local tester = torch.Tester()
+
+cmd = torch.CmdLine()
+cmd:text()
+cmd:text('Test image captioning model with RankerLSTM/RankerBRNN')
+cmd:text()
+cmd:text('Options')
+cmd:option('-ranker', 0, 'which ranker to use. 0 = use RankerLSTM')
+cmd:text()
+
+local optGlobal = cmd:parse(arg)
 
 -- validates the size and dimensions of a given
 -- tensor a to be size given in table sz
@@ -45,7 +57,12 @@ local function forwardApiTestFactory(dtype)
     rankerOpt.seq_length = lmOpt.seq_length
     rankerOpt.reg_ranker = 5e-2
     local lm = nn.LanguageModel(lmOpt)
-    local ranker = nn.Ranker(rankerOpt)
+    local ranker
+    if optGlobal.ranker == 0 then
+      ranker = nn.RankerLSTM(rankerOpt)
+    else
+      ranker = nn.RankerBRNN(rankerOpt)
+    end
     local lmCrit = nn.LanguageModelCriterion(lmOpt)
     local rankerCrit = nn.RankerCriterion(rankerOpt)
     lm:type(dtype)
@@ -67,13 +84,14 @@ local function forwardApiTestFactory(dtype)
     -- forward2
     local logprobs = lm:forward{imgs, seq}
     tester:assertlt(torch.max(logprobs:view(-1)), 0) -- log probs should be <0
-    local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
+    local sim_matrix, sembed, wembeds = unpack(ranker:forward{imgs, logprobs, seq})
 
     -- the output should be of size (seq_length + 2, batch_size, vocab_size + 1)
     -- where the +1 is for the special END token appended at the end.
     tester:assertTensorSizeEq(logprobs, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
     tester:assertTensorSizeEq(sim_matrix, {lmOpt.batch_size, lmOpt.batch_size})
     tester:assertTensorSizeEq(sembed, {lmOpt.batch_size, lmOpt.input_encoding_size})
+    -- tester:assertTensorSizeEq(wembeds, {lmOpt.seq_length, lmOpt.batch_size, lmOpt.input_encoding_size})
 
     local loss_softmax = lmCrit:forward(logprobs, seq)
     local loss_ranking = rankerCrit:forward(sim_matrix, torch.Tensor())
@@ -82,12 +100,13 @@ local function forwardApiTestFactory(dtype)
     -- backward
     local dsim_matrix = rankerCrit:backward(sim_matrix, torch.Tensor())
     local dlogprobs_lm = lmCrit:backward(logprobs, seq)
-    local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
-        unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
+    local dlogprobs_ranker, dsembed, dwembeds, dexpanded_feats_ranker, dummy =
+        unpack(ranker:backward({logprobs, sembed, wembeds, imgs, seq}, dsim_matrix))
 
     tester:assertTensorSizeEq(dlogprobs_lm, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
     tester:assertTensorSizeEq(dlogprobs_ranker, {lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1})
     tester:assertTensorSizeEq(dsembed, {lmOpt.batch_size, lmOpt.input_encoding_size})
+    -- tester:assertTensorSizeEq(dwembeds, {lmOpt.seq_length, lmOpt.batch_size, lmOpt.input_encoding_size})
     tester:assertTensorSizeEq(dexpanded_feats_ranker, {lmOpt.batch_size, lmOpt.input_encoding_size})
 
     local gradOutput = dlogprobs_lm + dlogprobs_ranker
@@ -175,7 +194,12 @@ local function gradCheckRankerLoss()
   opt.reg_ranker = 5e-2
 
   -- create Ranker instance
-  local ranker = nn.Ranker(opt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(opt)
+  else
+    ranker = nn.RankerBRNN(opt)
+  end
   local crit_ranker = nn.RankerCriterion(opt)
   ranker:type(dtype)
   crit_ranker:type(dtype)
@@ -213,7 +237,12 @@ local function gradCheckLogProbsRanker()
   rankerOpt.input_encoding_size = lmOpt.input_encoding_size
   rankerOpt.seq_length = lmOpt.seq_length
   local lm = nn.LanguageModel(lmOpt)
-  local ranker = nn.Ranker(rankerOpt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(rankerOpt)
+  else
+    ranker = nn.RankerBRNN(rankerOpt)
+  end
   lm:type(dtype)
   ranker:type(dtype)
 
@@ -223,16 +252,16 @@ local function gradCheckLogProbsRanker()
   local imgs = torch.randn(lmOpt.batch_size, lmOpt.input_encoding_size):type(dtype):fill(1.0)
 
   local logprobs = -torch.abs(torch.randn(lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1))
-  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
+  local sim_matrix, sembed, wembeds = unpack(ranker:forward{imgs, logprobs, seq})
   local w = torch.randn(sim_matrix:size(1), sim_matrix:size(2))
   local loss = torch.sum(torch.cmul(sim_matrix, w))
 
   local dsim_matrix = w
-  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
-    unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
+  local dlogprobs_ranker, dsembed, dwembeds, dexpanded_feats_ranker, dummy =
+    unpack(ranker:backward({logprobs, sembed, wembeds, imgs, seq}, dsim_matrix))
 
   local function f(x)
-    local sim_matrix, sembed = unpack(ranker:forward{imgs, x, seq})
+    local sim_matrix, sembed, wembeds = unpack(ranker:forward{imgs, x, seq})
     local loss = torch.sum(torch.cmul(sim_matrix, w))
     return loss
   end
@@ -262,7 +291,12 @@ local function gradCheckRankerImgs()
   rankerOpt.input_encoding_size = lmOpt.input_encoding_size
   rankerOpt.seq_length = lmOpt.seq_length
   local lm = nn.LanguageModel(lmOpt)
-  local ranker = nn.Ranker(rankerOpt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(rankerOpt)
+  else
+    ranker = nn.RankerBRNN(rankerOpt)
+  end
   lm:type(dtype)
   ranker:type(dtype)
 
@@ -272,16 +306,16 @@ local function gradCheckRankerImgs()
   local imgs = torch.randn(lmOpt.batch_size, lmOpt.input_encoding_size):type(dtype)
 
   local logprobs = -torch.abs(torch.randn(lmOpt.seq_length+2, lmOpt.batch_size, lmOpt.vocab_size+1))
-  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
+  local sim_matrix, sembed, wembeds = unpack(ranker:forward{imgs, logprobs, seq})
   local w = torch.randn(sim_matrix:size(1), sim_matrix:size(2))
   local loss = torch.sum(torch.cmul(sim_matrix, w))
 
   local dsim_matrix = w
-  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
-    unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
+  local dlogprobs_ranker, dsembed, dwembeds, dexpanded_feats_ranker, dummy =
+    unpack(ranker:backward({logprobs, sembed, wembeds, imgs, seq}, dsim_matrix))
 
   local function f(x)
-    local sim_matrix, sembed = unpack(ranker:forward{x, logprobs, seq})
+    local sim_matrix, sembed, wembeds = unpack(ranker:forward{x, logprobs, seq})
     local loss = torch.sum(torch.cmul(sim_matrix, w))
     return loss
   end
@@ -311,7 +345,12 @@ local function gradCheckRanker()
   rankerOpt.input_encoding_size = lmOpt.input_encoding_size
   rankerOpt.seq_length = lmOpt.seq_length
   local lm = nn.LanguageModel(lmOpt)
-  local ranker = nn.Ranker(rankerOpt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(rankerOpt)
+  else
+    ranker = nn.RankerBRNN(rankerOpt)
+  end
   lm:type(dtype)
   ranker:type(dtype)
 
@@ -326,12 +365,12 @@ local function gradCheckRanker()
   local loss_softmax = torch.sum(torch.cmul(logprobs, w1))
   local dlogprobs_softmax = w1
 
-  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
+  local sim_matrix, sembed, wembeds = unpack(ranker:forward{imgs, logprobs, seq})
   local w2 = torch.randn(sim_matrix:size())
   local loss_ranker = torch.sum(torch.cmul(sim_matrix, w2))
   local dsim_matrix = w2
-  local dlogprobs_ranker, dsembed, dexpanded_feats_ranker, dummy =
-    unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
+  local dlogprobs_ranker, dsembed, wembeds, dexpanded_feats_ranker, dummy =
+    unpack(ranker:backward({logprobs, sembed, wembeds, imgs, seq}, dsim_matrix))
 
   local loss = loss_softmax + loss_ranker
   local dlogprobs = dlogprobs_softmax + dlogprobs_ranker
@@ -342,7 +381,7 @@ local function gradCheckRanker()
   local function f(x)
     local logprobs = lm:forward{x, seq}
     local loss_softmax = torch.sum(torch.cmul(logprobs, w1))
-    local sim_matrix, sembed = unpack(ranker:forward{x, logprobs, seq})
+    local sim_matrix, sembed, wembeds = unpack(ranker:forward{x, logprobs, seq})
     local loss_ranker = torch.sum(torch.cmul(sim_matrix, w2))
     local loss = loss_softmax + loss_ranker
     return loss
@@ -374,7 +413,12 @@ local function gradCheck()
   crit:type(dtype)
 
   -- create Ranker instance
-  local ranker = nn.Ranker(opt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(opt)
+  else
+    ranker = nn.RankerBRNN(opt)
+  end
   local crit_ranker = nn.RankerCriterion(opt)
   ranker:type(dtype)
   crit_ranker:type(dtype)
@@ -391,13 +435,13 @@ local function gradCheck()
   -- evaluate the analytic gradient
   local logprobs = lm:forward{imgs, seq}
   local loss = crit:forward(logprobs, seq)
-  local sim_matrix, sembed = unpack(ranker:forward{imgs, logprobs, seq})
+  local sim_matrix, sembed, wembeds = unpack(ranker:forward{imgs, logprobs, seq})
   local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
 
   local gradOutput = crit:backward(logprobs, seq)
   local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
-  local dlogprobs_ranker, dsembed, dimgs_ranker, dummy =
-    unpack(ranker:backward({logprobs, sembed, imgs, seq}, dsim_matrix))
+  local dlogprobs_ranker, dsembed, dwembeds, dimgs_ranker, dummy =
+    unpack(ranker:backward({logprobs, sembed, wembeds, imgs, seq}, dsim_matrix))
   gradOutput = torch.add(gradOutput, dlogprobs_ranker)
   local gradInput, dummy = unpack(lm:backward({imgs, seq}, gradOutput))
   gradInput = torch.add(gradInput, dimgs_ranker)
@@ -406,7 +450,7 @@ local function gradCheck()
   local function f(x)
     local output = lm:forward{x, seq}
     local loss = crit:forward(output, seq)
-    local sim_matrix, sembed = unpack(ranker:forward{x, output, seq})
+    local sim_matrix, sembed, wembeds = unpack(ranker:forward{x, output, seq})
     local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
     loss = loss + ranking_loss
     return loss
@@ -447,7 +491,12 @@ local function overfit()
   crit:type(dtype)
 
   -- create Ranker instance
-  local ranker = nn.Ranker(opt)
+  local ranker
+  if optGlobal.ranker == 0 then
+    ranker = nn.RankerLSTM(opt)
+  else
+    ranker = nn.RankerBRNN(opt)
+  end
   local crit_ranker = nn.RankerCriterion(opt)
   ranker:type(dtype)
   crit_ranker:type(dtype)
@@ -475,12 +524,12 @@ local function overfit()
     grad_params:zero()
     local output = lm:forward{imgs, seq}
     local softmax_loss = crit:forward(output, seq)
-    local sim_matrix, sembed = unpack(ranker:forward{imgs, output, seq})
+    local sim_matrix, sembed, wembeds = unpack(ranker:forward{imgs, output, seq})
     local ranking_loss = crit_ranker:forward(sim_matrix, torch.Tensor())
     local gradOutput = crit:backward(output, seq)
     local dsim_matrix = crit_ranker:backward(sim_matrix, torch.Tensor())
-    local dlogprobs_ranker, dsembed, dimgs_ranker, dummy =
-      unpack(ranker:backward({output, sembed, imgs, seq}, dsim_matrix))
+    local dlogprobs_ranker, dsembed, dwembeds, dimgs_ranker, dummy =
+      unpack(ranker:backward({output, sembed, wembeds, imgs, seq}, dsim_matrix))
     gradOutput = torch.add(gradOutput, dlogprobs_ranker)
     local loss = softmax_loss + ranking_loss
     lm:backward({imgs, seq}, gradOutput)
@@ -595,14 +644,14 @@ end
 -- tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
 -- tests.gradCheckRankerLoss = gradCheckRankerLoss
--- tests.gradCheckRanker = gradCheckRanker
+tests.gradCheckRanker = gradCheckRanker
 -- tests.gradCheckRankerImgs = gradCheckRankerImgs
 -- tests.gradCheckLogProbsRanker = gradCheckLogProbsRanker
 -- tests.gradCheck = gradCheck
 -- tests.gradCheckLM = gradCheckLM
 -- tests.sample = sample
 -- tests.sample_beam = sample_beam
-tests.overfit = overfit
+-- tests.overfit = overfit
 
 tester:add(tests)
 tester:run()
